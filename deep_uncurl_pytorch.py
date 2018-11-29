@@ -20,6 +20,7 @@ import os
 #   Can we add an additional objective that represents the constraints? For example, add an objective that indicates how well the inferred M matches with the qualNorm constraints?
 # - the noise model is... sort of weird? Maybe we should do the softmax after adding in the noise???
 # - do we actually need M? Or can we just have M be the weights of a dense layer? A genes x k layer in the network??? Maybe even the final layer after the reparameterization???
+# - If we use reparameterization, should we do it on MW or just on W? On the one hand, using the reparameterization trick on MW is more like the original uncurl model. On the other hand, that's a lot more computation, and might be less interpretable or more messy. Could we do some kind of "clustering autoencoder"??? Would that even be helpful????
 
 
 def poisson_loss(outputs, labels):
@@ -28,15 +29,16 @@ def poisson_loss(outputs, labels):
 
     Basically, it's ||outputs - labels*log(outputs)||
     """
-    batch_size = outputs.size()[0]
     log_output = torch.log(outputs)
+    # TODO: should this be sum or mean?
     return torch.mean(torch.sum(outputs - labels*log_output, 1))
 
 
 # https://github.com/pytorch/examples/blob/master/vae/main.py
 # Reconstruction + KL divergence losses summed over all elements and batch
 def loss_function(recon_x, x, mu, logvar):
-    BCE = poisson_loss(recon_x, x)
+    #BCE = poisson_loss(recon_x, x)
+    BCE = F.poisson_nll_loss(recon_x, x, log_input=False, full=False, reduction='sum')
     #BCE = F.binary_cross_entropy(recon_x, x.view(-1, 784), reduction='sum')
     # see Appendix B from VAE paper:
     # Kingma and Welling. Auto-Encoding Variational Bayes. ICLR, 2014
@@ -50,9 +52,10 @@ class UncurlNetW(nn.Module):
 
     def __init__(self, genes, k, M, use_decoder=True,
             use_reparam=True,
-            use_m_layer=False):
+            use_m_layer=True):
         """
-        This is an autoencoder architecture that learns W.
+        This is an autoencoder architecture that learns a mapping from
+        the data to W.
 
         Args:
             genes (int): number of genes
@@ -71,11 +74,13 @@ class UncurlNetW(nn.Module):
         self.use_reparam = use_reparam
         self.fc1 = nn.Linear(genes, 400)
         self.fc21 = nn.Linear(400, k)
-        self.fc22 = nn.Linear(400, k)
+        self.fc22 = nn.Linear(400, genes)
         if use_m_layer:
-            self.m_layer = nn.Linear(k, genes)
+            self.m_layer = nn.Linear(k, genes, bias=False)
+            self.m_layer.weight = M.T
         self.fc_dec1 = nn.Linear(genes, 400)
-        self.fc_dec2 = nn.Linear(400, genes)
+        #self.fc_dec2 = nn.Linear(400, 400)
+        self.fc_dec3 = nn.Linear(400, genes)
 
     def encode(self, x):
         # returns two things: mu and logvar
@@ -87,7 +92,8 @@ class UncurlNetW(nn.Module):
 
     def decode(self, x):
         output = F.relu(self.fc_dec1(x))
-        output = F.relu(self.fc_dec2(output))
+        #output = F.relu(self.fc_dec2(output))
+        output = F.relu(self.fc_dec3(output))
         return output
 
     def reparameterize(self, mu, logvar):
@@ -98,11 +104,11 @@ class UncurlNetW(nn.Module):
     def forward(self, x):
         x1, logvar = self.encode(x)
         # should be a matrix-vector product
-        # TODO:
         mu = x1
         if self.use_m_layer:
             mu = self.m_layer(x1)
         else:
+            # TODO: will this preserve the correct dimensions???
             mu = torch.matmul(self.M, x1)
         if self.use_reparam:
             z = self.reparameterize(mu, logvar)
@@ -116,81 +122,44 @@ class UncurlNetW(nn.Module):
             else:
                 return mu
 
-    def loss(self, output, x, mu=None, logvar=None):
+    def clamp_m(self):
+        """
+        makes all the entries of self.m_layer non-negative.
+        """
+        w = self.m_layer.weight.data
+        w[w<0] = 0
+
+    def train_batch(self, x, optim):
+        """
+        Trains on a data batch, with the given optimizer...
+        """
+        optim.zero_grad()
         if self.use_reparam:
-            return loss_function(output, x, mu, logvar)
+            output, mu, logvar = self(x)
+            loss = loss_function(output, x, mu, logvar)
+            loss.backward()
         else:
-            return poisson_loss(output, x)
+            output = self(x)
+            loss = poisson_loss(output, x)
+            loss.backward()
+        optim.step()
+        return loss.item()
 
 
-class UncurlNetM(nn.Module):
 
-    def __init__(self, cells, k, W, use_decoder=True, use_reparam=True):
-        super(UncurlNetM, self).__init__()
-        self.cells = cells
-        self.k = k
-        self.W = W
-        self.use_decoder = use_decoder
-        self.use_reparam = use_reparam
-        self.fc1 = nn.Linear(cells, 400)
-        self.fc21 = nn.Linear(400, k)
-        self.fc22 = nn.Linear(400, k)
-        self.fc_dec1 = nn.Linear(cells, 400)
-        self.fc_dec2 = nn.Linear(400, cells)
-
-    def encode(self, x):
-        # returns two things: mu and logvar
-        output = F.relu(self.fc1(x))
-        if self.use_reparam:
-            return F.relu(self.fc21(output)), self.fc22(output)
-        else:
-            return F.relu(self.fc21(output))
-
-    def decode(self, x):
-        output = F.relu(self.fc_dec1(x))
-        output = F.relu(self.fc_dec2(output))
-        return output
-
-    def reparameterize(self, mu, logvar):
-        std = torch.exp(0.5*logvar)
-        eps = torch.randn_like(std)
-        return eps.mul(std).add_(mu)
-
-    def forward(self, x):
-        x1, logvar = self.encode(x)
-        # should be a matrix-vector product
-        mu = torch.matmul(self.W, x1)
-        # TODO: do a matrix multiplication???
-        # do the reparameterization after the matrix multiplication
-        if self.use_reparam:
-            z = self.reparameterize(mu, logvar)
-            if self.use_decoder:
-                return self.decode(z), mu, logvar
-            else:
-                return z, mu, logvar
-        else:
-            if self.use_decoder:
-                return self.decode(mu)
-            else:
-                return mu
-
-    def loss(self):
-        # TODO
-        pass
-
-
-def train_model(model, epoch):
+def train_model(model, epoch, train_loader, device, optimizer):
+    """
+    Trains the model for one epoch.
+    """
     model.train()
     train_loss = 0
+    log_interval = 100
     for batch_idx, (data, _) in enumerate(train_loader):
         data = data.to(device)
         optimizer.zero_grad()
-        recon_batch, mu, logvar = model(data)
-        loss = loss_function(recon_batch, data, mu, logvar)
-        loss.backward()
-        train_loss += loss.item()
+        loss = model.train_batch(data)
         optimizer.step()
-        if batch_idx % args.log_interval == 0:
+        if batch_idx % log_interval == 0:
             print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                     epoch, batch_idx * len(data), len(train_loader.dataset),
                     100. * batch_idx / len(train_loader),
@@ -222,9 +191,26 @@ class UncurlNet(object):
         self.m_net = UncurlNetM(self.k, self.cells, W)
         # TODO: set device (cpu or gpu), optimizer
 
-    def train(self, n_outer_iters=20, n_epochs=20):
+    def preprocess(self):
+        """
+        Preprocesses the data, converts self.X into a tensor.
+        """
+        from scipy import sparse
+        if sparse.issparse(self.X):
+            self.X = sparse.coo_matrix(self.X)
+            values = self.X.data
+            indices = np.vstack((self.X.row, self.X.col))
+            i = torch.LongTensor(indices)
+            v = torch.FloatTensor(values)
+            self.X = torch.sparse.FloatTensor(i, v, torch.Size(self.X.shape))
+        else:
+            self.X = torch.tensor(self.X, dtype=torch.float32)
+
+    def train(self, n_outer_iters=20, n_epochs=20, lr=0.001):
         """
         """
+        data_loader = torch.utils.data.DataLoader(self.X.T)
+        optimizer = torch.optim.SparseAdam(lr=lr)
 
 def train(model, device, train_loader, optimizer, **kwargs):
     """
