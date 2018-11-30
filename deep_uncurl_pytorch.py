@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+import torch.utils.data
 
 from uncurl.state_estimation import initialize_means_weights
 
@@ -52,7 +53,7 @@ class UncurlNetW(nn.Module):
 
     def __init__(self, genes, k, M, use_decoder=True,
             use_reparam=True,
-            use_m_layer=True):
+            use_m_layer=True, **kwargs):
         """
         This is an autoencoder architecture that learns a mapping from
         the data to W.
@@ -63,7 +64,7 @@ class UncurlNetW(nn.Module):
             M (array): genes x k matrix
             use_decoder (bool): whether or not to use a decoder layer
             use_reparam (bool): whether or not to  use reparameterization trick
-            use_m_layer (bool):
+            use_m_layer (bool): whether or not to treat M as a differentiable linear layer
         """
         super(UncurlNetW, self).__init__()
         self.genes = genes
@@ -72,12 +73,14 @@ class UncurlNetW(nn.Module):
         self.M = M
         self.use_decoder = use_decoder
         self.use_reparam = use_reparam
+        self.use_m_layer = use_m_layer
+        # TODO: add batch norm???
         self.fc1 = nn.Linear(genes, 400)
         self.fc21 = nn.Linear(400, k)
         self.fc22 = nn.Linear(400, genes)
         if use_m_layer:
             self.m_layer = nn.Linear(k, genes, bias=False)
-            self.m_layer.weight = M.T
+            self.m_layer.weight.data = M#.transpose(0, 1)
         self.fc_dec1 = nn.Linear(genes, 400)
         #self.fc_dec2 = nn.Linear(400, 400)
         self.fc_dec3 = nn.Linear(400, genes)
@@ -138,41 +141,34 @@ class UncurlNetW(nn.Module):
             output, mu, logvar = self(x)
             loss = loss_function(output, x, mu, logvar)
             loss.backward()
+            self.clamp_m()
         else:
             output = self(x)
             loss = poisson_loss(output, x)
             loss.backward()
+            self.clamp_m()
         optim.step()
         return loss.item()
 
+    def get_w(self, X):
+        self.eval()
+        X_tensor = torch.tensor(X.T, dtype=torch.float32)
+        encode_results = self.encode(X_tensor)
+        if self.use_reparam:
+            return encode_results[0].detach()
+        else:
+            return encode_results
+        #data_loader = torch.utils.data.DataLoader(X.T,
+        #        batch_size=X.shape[1],
+        #        shuffle=False)
 
-
-def train_model(model, epoch, train_loader, device, optimizer):
-    """
-    Trains the model for one epoch.
-    """
-    model.train()
-    train_loss = 0
-    log_interval = 100
-    for batch_idx, (data, _) in enumerate(train_loader):
-        data = data.to(device)
-        optimizer.zero_grad()
-        loss = model.train_batch(data)
-        optimizer.step()
-        if batch_idx % log_interval == 0:
-            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                    epoch, batch_idx * len(data), len(train_loader.dataset),
-                    100. * batch_idx / len(train_loader),
-                    loss.item() / len(data)))
-
-    print('====> Epoch: {} Average loss: {:.4f}'.format(
-    epoch, train_loss / len(train_loader.dataset)))
-
+    def get_m(self):
+        return self.m_layer.weight.data
 
 
 class UncurlNet(object):
 
-    def __init__(self, X, k, initialization='tsvd'):
+    def __init__(self, X, k, initialization='tsvd', **kwargs):
         """
         Args:
             X: data matrix (can be dense np array or sparse), of shape genes x cells
@@ -185,11 +181,17 @@ class UncurlNet(object):
         self.cells = X.shape[1]
         # initialize M and W using uncurl's initialization
         M, W = initialize_means_weights(X, k, initialization=initialization)
-        self.M = M
-        self.W = W
-        self.w_net = UncurlNetW(self.k, self.genes, M)
-        self.m_net = UncurlNetM(self.k, self.cells, W)
+        self.M = torch.tensor(M, dtype=torch.float32)
+        self.W = torch.tensor(W, dtype=torch.float32)
+        self.w_net = UncurlNetW(self.genes, self.k, self.M, **kwargs)
         # TODO: set device (cpu or gpu), optimizer
+
+    @classmethod
+    def load(path):
+        """
+        loads an UncurlNet object from file.
+        """
+        # TODO
 
     def preprocess(self):
         """
@@ -206,12 +208,52 @@ class UncurlNet(object):
         else:
             self.X = torch.tensor(self.X, dtype=torch.float32)
 
-    def train(self, n_outer_iters=20, n_epochs=20, lr=0.001):
+    def train(self, X=None, n_epochs=20, lr=1e-3, weight_decay=0, disp=True,
+            device='cpu', log_interval=1, batch_size=0):
         """
-        """
-        data_loader = torch.utils.data.DataLoader(self.X.T)
-        optimizer = torch.optim.SparseAdam(lr=lr)
+        trains the network...
 
-def train(model, device, train_loader, optimizer, **kwargs):
-    """
-    """
+        Args:
+            n_epochs:
+        """
+        if X is not None:
+            self.X = X
+        if batch_size == 0:
+            batch_size = int(self.X.shape[1]/20)
+            batch_size = 10
+        data_loader = torch.utils.data.DataLoader(self.X.T,
+                batch_size=batch_size,
+                shuffle=True)
+        #optimizer = torch.optim.SparseAdam(lr=lr, weight_decay=weight_decay)
+        optimizer = torch.optim.Adam(params=self.w_net.parameters(),
+                lr=lr, weight_decay=weight_decay)
+        for epoch in range(n_epochs):
+            train_loss = 0.0
+            for batch_idx, data in enumerate(data_loader):
+                data = data.to(device)
+                optimizer.zero_grad()
+                loss = self.w_net.train_batch(data, optimizer)
+                optimizer.step()
+                if disp and (batch_idx % log_interval == 0):
+                    print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+                            epoch, batch_idx * len(data), len(data_loader.dataset),
+                            100. * batch_idx / len(data_loader),
+                            loss / len(data)))
+                train_loss += loss
+            if disp:
+                print('====> Epoch: {} Average loss: {:.4f}'.format(
+                    epoch, train_loss / len(data_loader.dataset)))
+
+
+
+
+
+if __name__ == '__main__':
+    import scipy
+    mat = scipy.io.loadmat('data/10x_pooled_400.mat')
+    uncurl_net = UncurlNet(mat['data'].toarray().astype(np.float32), 8,
+            use_reparam=False, use_decoder=False)
+    uncurl_net.train()
+    X = uncurl_net.X
+    w = uncurl_net.w_net.get_w(X)
+    m = uncurl_net.w_net.get_m()

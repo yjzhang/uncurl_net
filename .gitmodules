@@ -1,0 +1,3 @@
+[submodule "uncurl_python"]
+	path = uncurl_python
+	url = https://github.com/yjzhang/uncurl_python
