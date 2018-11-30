@@ -91,7 +91,7 @@ class UncurlNetW(nn.Module):
         if self.use_reparam:
             return F.softmax(self.fc21(output)), self.fc22(output)
         else:
-            return F.softmax(self.fc21(output))
+            return F.softmax(self.fc21(output)), None
 
     def decode(self, x):
         output = F.relu(self.fc_dec1(x))
@@ -144,7 +144,7 @@ class UncurlNetW(nn.Module):
             self.clamp_m()
         else:
             output = self(x)
-            loss = poisson_loss(output, x)
+            loss = F.poisson_nll_loss(output, x, log_input=False, full=False, reduction='sum')
             loss.backward()
             self.clamp_m()
         optim.step()
@@ -262,7 +262,7 @@ class UncurlNet(object):
 
 
 if __name__ == '__main__':
-    import scipy
+    import scipy.io
     mat = scipy.io.loadmat('data/10x_pooled_400.mat')
     uncurl_net = UncurlNet(mat['data'].toarray().astype(np.float32), 8,
             use_reparam=False, use_decoder=False)
