@@ -168,21 +168,30 @@ class UncurlNetW(nn.Module):
 
 class UncurlNet(object):
 
-    def __init__(self, X, k, initialization='tsvd', **kwargs):
+    def __init__(self, X=None, k=10, genes=0, cells=0, initialization='tsvd', init_m=None, **kwargs):
         """
+        UncurlNet can be initialized in two ways:
+            - initialize using X, a genes x cells data matrix
+            - initialize using genes, cells, init_m (when X is not available)
+
         Args:
             X: data matrix (can be dense np array or sparse), of shape genes x cells
             k (int): number of clusters (latent dimensionality)
             initialization (str): see uncurl.initialize_means_weights
         """
-        self.X = X
+        if X is not None:
+            self.X = X
+            self.genes = X.shape[0]
+            self.cells = X.shape[1]
+            M, W = initialize_means_weights(X, k, initialization=initialization)
+            self.M = torch.tensor(M, dtype=torch.float32)
+        else:
+            self.X = None
+            self.genes = genes
+            self.cells = cells
+            self.M = torch.tensor(init_m, dtype=torch.float32)
         self.k = k
-        self.genes = X.shape[0]
-        self.cells = X.shape[1]
         # initialize M and W using uncurl's initialization
-        M, W = initialize_means_weights(X, k, initialization=initialization)
-        self.M = torch.tensor(M, dtype=torch.float32)
-        self.W = torch.tensor(W, dtype=torch.float32)
         self.w_net = UncurlNetW(self.genes, self.k, self.M, **kwargs)
         # TODO: set device (cpu or gpu), optimizer
 
@@ -192,6 +201,10 @@ class UncurlNet(object):
         loads an UncurlNet object from file.
         """
         # TODO
+
+    def save(self, path):
+        # TODO
+        pass
 
     def preprocess(self):
         """
