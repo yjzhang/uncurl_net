@@ -144,7 +144,7 @@ class UncurlNetW(nn.Module):
             self.clamp_m()
         else:
             output = self(x)
-            loss = F.poisson_nll_loss(output, x, log_input=False, full=False, reduction='sum')
+            loss = F.poisson_nll_loss(output, x, log_input=False, full=False)
             loss.backward()
             self.clamp_m()
         optim.step()
@@ -154,10 +154,7 @@ class UncurlNetW(nn.Module):
         self.eval()
         X_tensor = torch.tensor(X.T, dtype=torch.float32)
         encode_results = self.encode(X_tensor)
-        if self.use_reparam:
-            return encode_results[0].detach()
-        else:
-            return encode_results
+        return encode_results[0].detach()
         #data_loader = torch.utils.data.DataLoader(X.T,
         #        batch_size=X.shape[1],
         #        shuffle=False)
@@ -238,7 +235,7 @@ class UncurlNet(object):
                 batch_size=batch_size,
                 shuffle=True)
         #optimizer = torch.optim.SparseAdam(lr=lr, weight_decay=weight_decay)
-        optimizer = torch.optim.Adam(params=self.w_net.parameters(),
+        optimizer = torch.optim.SGD(params=self.w_net.parameters(),
                 lr=lr, weight_decay=weight_decay)
         for epoch in range(n_epochs):
             train_loss = 0.0
@@ -266,7 +263,8 @@ if __name__ == '__main__':
     mat = scipy.io.loadmat('data/10x_pooled_400.mat')
     uncurl_net = UncurlNet(mat['data'].toarray().astype(np.float32), 8,
             use_reparam=False, use_decoder=False)
-    uncurl_net.train()
+    uncurl_net.train(lr=1e-3, n_epochs=5)
     X = uncurl_net.X
     w = uncurl_net.w_net.get_w(X)
     m = uncurl_net.w_net.get_m()
+    print(w.argmax(1))
