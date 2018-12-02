@@ -1,0 +1,15 @@
+# note: this is using 400 hidden units.
+# and this is all on 10x_pooled_400 with k=8 and all genes.
+lr	weight_decay	momentum	batch_norm	optimizer	batch_size	epochs	use_reparam	use_decoder	loss	nmi
+1e-8	0	0	0	SGD	100	150	False	False	32.49	0.783
+1e-8	0	0	1	SGD	100	250	False	False	41.78	0.685
+1e-8	0	0	1	SGD	100	250	False	False	58.13	0.738
+1e-5	0	0	1	SGD	100	250	False	False	65.26	0.614
+1e-5	0	0	0	SGD	100	150	False	False	2342	0.000
+1e-8	0	0	0	Adam	100	150	False	False	573	0.161
+1e-5	0	0	0	Adam	100	150	False	False	-21.247	0.765
+1e-3	0	0	0	Adam	100	150	False	False	239.3	0.539
+1e-5	0	0	0	Adam	100	250	False	False	-12.0	0.799
+1e-5	0	0	1	Adam	100	250	False	False	-16.4	0.734
+1e-3	0	0	1	Adam	100	150	False	True	5783.5508	0.235
+1e-3	0	0	1	Adam	100	150	True	True	8391.8253	0.000
