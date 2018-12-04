@@ -7,7 +7,7 @@ setup(name='uncurlnet',
         author_email='yjzhang@cs.washington.edu',
         license='MIT',
         packages=find_packages('.'),
-        install_requires=['numpy', 'scipy', 'scikit-learn', 'torch'],
+        install_requires=['numpy', 'scipy', 'scikit-learn', 'torch', 'uncurl-seq'],
         test_suite='nose.collector',
         test_requires=['nose', 'flaky'],
 )

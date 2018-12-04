@@ -1,5 +1,6 @@
 # note: this is using 400 hidden units.
 # and this is all on 10x_pooled_400 with k=8 and all genes.
+# loss is the negative Poisson log-likelihood (unnormalized) when use_reparam is False.
 lr	weight_decay	momentum	batch_norm	optimizer	batch_size	epochs	use_reparam	use_decoder	loss	nmi
 1e-8	0	0	0	SGD	100	150	False	False	32.49	0.783
 1e-8	0	0	1	SGD	100	250	False	False	41.78	0.685

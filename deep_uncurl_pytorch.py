@@ -51,10 +51,10 @@ def loss_function(recon_x, x, mu, logvar):
     KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
     return BCE + KLD
 
-class ArrayDataSet(torch.utils.data.DataSet):
+#class ArrayDataSet(torch.utils.data.DataSet):
 
-    def __init__(self):
-        pass
+#    def __init__(self):
+#        pass
 
 def train_encoder(model, X, output, n_epochs=20, lr=1e-3, weight_decay=0, disp=True,
         device='cpu', log_interval=1, batch_size=0,
@@ -98,22 +98,28 @@ def train_encoder(model, X, output, n_epochs=20, lr=1e-3, weight_decay=0, disp=T
 
 class WEncoder(nn.Module):
 
-    def __init__(self, genes, k, use_reparam=True):
+    def __init__(self, genes, k, use_reparam=True, use_batch_norm=True):
         """
         The W Encoder generates W from the data.
         """
         super(WEncoder, self).__init__()
         self.genes = genes
         self.k = k
+        self.use_batch_norm = use_batch_norm
         self.use_reparam = use_reparam
         self.fc1 = nn.Linear(genes, 400)
-        self.bn1 = nn.BatchNorm1d(400)
+        if use_batch_norm:
+            self.bn1 = nn.BatchNorm1d(400)
         self.fc21 = nn.Linear(400, k)
         #self.bn2 = nn.BatchNorm1d(k)
         self.fc22 = nn.Linear(400, genes)
 
     def forward(self, x):
-        output = F.relu(self.bn1(self.fc1(x)))
+        output = self.fc1(x)
+        if self.use_batch_norm:
+            output = F.relu(self.bn1(self.fc1(x)))
+        else:
+            output = F.relu(self.fc1(x))
         if self.use_reparam:
             return F.softmax(self.fc21(output)), self.fc22(output)
         else:
@@ -123,6 +129,7 @@ class WEncoder(nn.Module):
         """
         Trains on a data batch, with the given optimizer...
         """
+        # TODO: this won't work - this isn't an autoencoder....
         optim.zero_grad()
         if self.use_reparam:
             output, mu, logvar = self(x)
@@ -158,7 +165,9 @@ class UncurlNetW(nn.Module):
 
     def __init__(self, genes, k, M, use_decoder=True,
             use_reparam=True,
-            use_m_layer=True, **kwargs):
+            use_m_layer=True,
+            use_batch_norm=True,
+            **kwargs):
         """
         This is an autoencoder architecture that learns a mapping from
         the data to W.
@@ -178,9 +187,10 @@ class UncurlNetW(nn.Module):
         self.M = M
         self.use_decoder = use_decoder
         self.use_reparam = use_reparam
+        self.use_batch_norm = use_batch_norm
         self.use_m_layer = use_m_layer
         # TODO: add batch norm???
-        self.encoder = WEncoder(genes, k, use_reparam)
+        self.encoder = WEncoder(genes, k, use_reparam, use_batch_norm)
         if use_m_layer:
             self.m_layer = nn.Linear(k, genes, bias=False)
             self.m_layer.weight.data = M#.transpose(0, 1)
@@ -367,8 +377,10 @@ class UncurlNet(object):
 if __name__ == '__main__':
     import scipy.io
     mat = scipy.io.loadmat('data/10x_pooled_400.mat')
+
     uncurl_net = UncurlNet(mat['data'].toarray().astype(np.float32), 8,
             use_reparam=True, use_decoder=True)
+
     uncurl_net.train(lr=1e-3, n_epochs=250)
     X = uncurl_net.X
     w = uncurl_net.w_net.get_w(X)
@@ -378,3 +390,7 @@ if __name__ == '__main__':
     actual_labels = mat['labels'].squeeze()
     from sklearn.metrics.cluster import normalized_mutual_info_score as nmi
     print(nmi(labels, actual_labels))
+
+    import uncurl
+    m, w = uncurl.poisson_estimate_state(mat['data'], clusters=8)
+    print(nmi(actual_labels, w.argmax(1)))
