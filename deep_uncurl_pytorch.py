@@ -51,10 +51,6 @@ def loss_function(recon_x, x, mu, logvar):
     KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
     return BCE + KLD
 
-#class ArrayDataSet(torch.utils.data.DataSet):
-
-#    def __init__(self):
-#        pass
 
 def train_encoder(model, X, output, n_epochs=20, lr=1e-3, weight_decay=0, disp=True,
         device='cpu', log_interval=1, batch_size=0,
@@ -125,7 +121,7 @@ class WEncoder(nn.Module):
         else:
             return F.softmax(self.fc21(output)), None
 
-    def train_batch(self, x, optim):
+    def train_batch(self, x, y, optim):
         """
         Trains on a data batch, with the given optimizer...
         """
@@ -133,11 +129,11 @@ class WEncoder(nn.Module):
         optim.zero_grad()
         if self.use_reparam:
             output, mu, logvar = self(x)
-            loss = loss_function(output, x, mu, logvar)
+            loss = loss_function(output, y, mu, logvar)
             loss.backward()
         else:
             output = self(x)
-            loss = F.poisson_nll_loss(output, x, log_input=False, full=False, reduction='sum')
+            loss = F.poisson_nll_loss(output, y, log_input=False, full=False, reduction='sum')
             loss.backward()
         optim.step()
         self.clamp_m()
@@ -279,8 +275,11 @@ class UncurlNetW(nn.Module):
 
     def pre_train_decoder(self, W_init, X):
         """
-        pre-trains the decoder...
+        pre-trains the decoder (assumes that M is already initialized)...
         """
+        # TODO
+        if W_init.shape[0] == self.k:
+            W_init = W_init.T
 
 class UncurlNet(object):
 
@@ -337,13 +336,42 @@ class UncurlNet(object):
         else:
             self.X = torch.tensor(self.X, dtype=torch.float32)
 
-    def train(self, X=None, n_epochs=20, lr=1e-3, weight_decay=0, disp=True,
+    def pre_train_encoder(self, X=None, n_epochs=20, lr=1e-3, weight_decay=0, disp=True,
             device='cpu', log_interval=1, batch_size=0):
         """
-        trains the network...
+        pre-trains the encoder for w_net - fixing M.
 
         Args:
             n_epochs:
+        """
+        self.w_net.train()
+        self.w_net.m_layer.eval()
+        self._train(X, n_epochs, lr, weight_decay, disp, device, log_interval,
+                batch_size)
+
+    def train_model(self, X=None, n_epochs=20, lr=1e-3, weight_decay=0, disp=True,
+            device='cpu', log_interval=1, batch_size=0):
+        """
+        trains the entire model.
+        """
+        self.w_net.train()
+        self._train(X, n_epochs, lr, weight_decay, disp, device, log_interval,
+                batch_size)
+
+    def _train(self, X=None, n_epochs=20, lr=1e-3, weight_decay=0, disp=True,
+            device='cpu', log_interval=1, batch_size=0):
+        """
+        trains the w_net...
+
+        Args:
+            X (array): genes x cells
+            n_epochs: number of epochs to train for
+            lr (float): learning rate
+            weight_decay (float)
+            disp (bool): whether or not to display outputs
+            device (str): cpu or gpu
+            log_interval: how often to print log
+            batch_size: default is max(100, cells/20)
         """
         if X is not None:
             self.X = X
@@ -377,11 +405,13 @@ class UncurlNet(object):
 if __name__ == '__main__':
     import scipy.io
     mat = scipy.io.loadmat('data/10x_pooled_400.mat')
+    X = mat['data'].toarray().astype(np.float32)
 
-    uncurl_net = UncurlNet(mat['data'].toarray().astype(np.float32), 8,
-            use_reparam=True, use_decoder=True)
+    uncurl_net = UncurlNet(X, 8,
+            use_reparam=False, use_decoder=False)
 
-    uncurl_net.train(lr=1e-3, n_epochs=250)
+    uncurl_net.pre_train_encoder(X, lr=1e-5, n_epochs=20)
+    uncurl_net.train_model(X, lr=1e-5, n_epochs=200)
     X = uncurl_net.X
     w = uncurl_net.w_net.get_w(X)
     m = uncurl_net.w_net.get_m()
