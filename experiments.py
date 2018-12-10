@@ -59,6 +59,7 @@ if __name__ == '__main__':
     import scipy.io
     from purity_analysis import plot_df, build_simple_table
     data = scipy.io.mmread('../uncurl_test_datasets/10x_pure_pooled/data_8000_cells.mtx.gz')
+    data = sparse.csc_matrix(data)
     actual_labels = np.loadtxt('../uncurl_test_datasets/10x_pure_pooled/labels_8000_cells.txt').astype(int).flatten()
     k = len(set(actual_labels))
     genes = uncurl.max_variance_genes(data, 5, 0.2)

@@ -388,7 +388,7 @@ class UncurlNet(object):
         Trains the model, first fitting the encoder and then fitting both M and
         the encoder.
         """
-        self.train_encoder(X, n_epochs=n_encoder_epochs, **params)
+        self.pre_train_encoder(X, n_epochs=n_encoder_epochs, **params)
         self.train_model(X, n_epochs=n_model_epochs, **params)
 
     def train_alternating(self, X=None, n_outer_iters=10, n_inner_epochs=10, **params):
@@ -397,7 +397,7 @@ class UncurlNet(object):
         and then fitting M.
         """
         for i in range(n_outer_iters):
-            self.train_encoder(X, n_epochs=n_inner_epochs, **params)
+            self.pre_train_encoder(X, n_epochs=n_inner_epochs, **params)
             self.train_model(X, n_epochs=n_inner_epochs, **params)
 
     def _train(self, X=None, n_epochs=20, lr=1e-3, weight_decay=0, disp=True,
