@@ -141,7 +141,7 @@ class WEncoder(nn.Module):
 
 class WDecoder(nn.Module):
 
-    def __init__(self, genes, k, use_reparam=True):
+    def __init__(self, genes, k, use_reparam=True, use_batch_norm=True):
         """
         The W Decoder takes M*W, and returns X.
         """
@@ -163,6 +163,7 @@ class UncurlNetW(nn.Module):
             use_reparam=True,
             use_m_layer=True,
             use_batch_norm=True,
+            use_l1=False,
             **kwargs):
         """
         This is an autoencoder architecture that learns a mapping from
@@ -185,24 +186,23 @@ class UncurlNetW(nn.Module):
         self.use_reparam = use_reparam
         self.use_batch_norm = use_batch_norm
         self.use_m_layer = use_m_layer
+        self.use_l1 = use_l1
         # TODO: add batch norm???
         self.encoder = WEncoder(genes, k, use_reparam, use_batch_norm)
         if use_m_layer:
             self.m_layer = nn.Linear(k, genes, bias=False)
             self.m_layer.weight.data = M#.transpose(0, 1)
-        self.fc_dec1 = nn.Linear(genes, 400)
-        #self.fc_dec2 = nn.Linear(400, 400)
-        self.fc_dec3 = nn.Linear(400, genes)
+        if self.use_decoder:
+            self.decoder = WDecoder(genes, k, use_reparam, use_batch_norm)
+        else:
+            self.decoder = None
 
     def encode(self, x):
         # returns two things: mu and logvar
         return self.encoder(x)
 
     def decode(self, x):
-        output = F.relu(self.fc_dec1(x))
-        #output = F.relu(self.fc_dec2(output))
-        output = F.relu(self.fc_dec3(output))
-        return output
+        return self.decoder(x)
 
     def reparameterize(self, mu, logvar):
         std = torch.exp(0.5*logvar)
@@ -245,10 +245,11 @@ class UncurlNetW(nn.Module):
         optim.zero_grad()
         if self.use_reparam:
             output, mu, logvar = self(x)
+            output += EPS
             loss = loss_function(output, x, mu, logvar)
             loss.backward()
         else:
-            output = self(x)
+            output = self(x) + EPS
             loss = F.poisson_nll_loss(output, x, log_input=False, full=False, reduction='sum')
             loss.backward()
         optim.step()
@@ -267,19 +268,6 @@ class UncurlNetW(nn.Module):
     def get_m(self):
         return self.m_layer.weight.data
 
-    def pre_train_encoder(self, W_init):
-        """
-        pre-trains the encoder to generate W_init
-        """
-        # TODO
-
-    def pre_train_decoder(self, W_init, X):
-        """
-        pre-trains the decoder (assumes that M is already initialized)...
-        """
-        # TODO
-        if W_init.shape[0] == self.k:
-            W_init = W_init.T
 
 class UncurlNet(object):
 
@@ -340,12 +328,25 @@ class UncurlNet(object):
             device='cpu', log_interval=1, batch_size=0):
         """
         pre-trains the encoder for w_net - fixing M.
-
-        Args:
-            n_epochs:
         """
         self.w_net.train()
-        self.w_net.m_layer.eval()
+        for param in self.w_net.encoder.parameters():
+            param.requires_grad = True
+        for param in self.w_net.m_layer.parameters():
+            param.requires_grad = False
+        self._train(X, n_epochs, lr, weight_decay, disp, device, log_interval,
+                batch_size)
+
+    def train_m(self, X=None, n_epochs=20, lr=1e-3, weight_decay=0, disp=True,
+            device='cpu', log_interval=1, batch_size=0):
+        """
+        trains only the m layer.
+        """
+        self.w_net.train()
+        for param in self.w_net.encoder.parameters():
+            param.requires_grad = False
+        for param in self.w_net.m_layer.parameters():
+            param.requires_grad = True
         self._train(X, n_epochs, lr, weight_decay, disp, device, log_interval,
                 batch_size)
 
@@ -355,6 +356,10 @@ class UncurlNet(object):
         trains the entire model.
         """
         self.w_net.train()
+        for param in self.w_net.encoder.parameters():
+            param.requires_grad = True
+        for param in self.w_net.m_layer.parameters():
+            param.requires_grad = True
         self._train(X, n_epochs, lr, weight_decay, disp, device, log_interval,
                 batch_size)
 
@@ -403,24 +408,102 @@ class UncurlNet(object):
 
 
 if __name__ == '__main__':
+    import uncurl
     import scipy.io
+    from sklearn.cluster import KMeans
+    from sklearn.metrics.cluster import normalized_mutual_info_score as nmi
+
     mat = scipy.io.loadmat('data/10x_pooled_400.mat')
+    actual_labels = mat['labels'].squeeze()
     X = mat['data'].toarray().astype(np.float32)
+    genes = uncurl.max_variance_genes(X, 5, 0.2)
+    X_subset = X[genes,:]
 
-    uncurl_net = UncurlNet(X, 8,
-            use_reparam=False, use_decoder=False)
+    uncurl_net = UncurlNet(X_subset, 8,
+            use_reparam=False, use_decoder=False,
+            use_batch_norm=True)
+    m_init = torch.tensor(uncurl_net.M)
 
-    uncurl_net.pre_train_encoder(X, lr=1e-5, n_epochs=20)
-    uncurl_net.train_model(X, lr=1e-5, n_epochs=200)
-    X = uncurl_net.X
-    w = uncurl_net.w_net.get_w(X)
+    """
+    uncurl_net.pre_train_encoder(X_subset, lr=1e-3, n_epochs=10)
+    m = uncurl_net.w_net.get_m()
+    assert((m==m_init).sum() == m.shape[0]*m.shape[1])
+    w = uncurl_net.w_net.get_w(X_subset)
+    labels = w.argmax(1).numpy().squeeze()
+    print('nmi with just training w:', nmi(labels, actual_labels))
+
+    uncurl_net.train_model(X_subset, lr=1e-3, n_epochs=10)
+    w = uncurl_net.w_net.get_w(X_subset)
     m = uncurl_net.w_net.get_m()
     print(w.argmax(1))
     labels = w.argmax(1).numpy().squeeze()
-    actual_labels = mat['labels'].squeeze()
-    from sklearn.metrics.cluster import normalized_mutual_info_score as nmi
-    print(nmi(labels, actual_labels))
+    print('nmi after training both:', nmi(labels, actual_labels))
+    """
 
-    import uncurl
-    m, w = uncurl.poisson_estimate_state(mat['data'], clusters=8)
-    print(nmi(actual_labels, w.argmax(1)))
+    for i in range(10):
+        uncurl_net.pre_train_encoder(X_subset, lr=1e-3, n_epochs=20,
+                log_interval=10)
+        uncurl_net.train_m(X_subset, lr=1e-3, n_epochs=20,
+                log_interval=10)
+    w = uncurl_net.w_net.get_w(X_subset).transpose(1, 0)
+    m = uncurl_net.w_net.get_m()
+    mw = torch.matmul(m, w)
+    km = KMeans(8)
+    print(w.argmax(0))
+    labels = w.argmax(0).numpy().squeeze()
+    labels_km = km.fit_predict(w.transpose(1, 0))
+    labels_km_mw = km.fit_predict(mw.transpose(1, 0))
+    print('nmi after alternating training:', nmi(labels, actual_labels))
+    print('nmi of km(w) after alternating training:', nmi(labels_km, actual_labels))
+    print('nmi of km(mw) after alternating training:', nmi(labels_km_mw, actual_labels))
+    labels_km_x_subset = km.fit_predict(X_subset.T)
+    print('nmi of km(x_subset):', nmi(labels_km_x_subset, actual_labels))
+
+    m, w, ll = uncurl.poisson_estimate_state(X_subset, clusters=8)
+    print(nmi(actual_labels, w.argmax(0)))
+
+    ############# dataset 2: Zeisel subset
+
+    mat2 = scipy.io.loadmat('data/GSE60361_dat.mat')
+    actual_labels = mat2['ActLabs'].squeeze()
+    X = mat2['Dat'].astype(np.float32)
+    genes = uncurl.max_variance_genes(X, 5, 0.2)
+    X_subset = X[genes,:]
+
+    uncurl_net = UncurlNet(X_subset, 7,
+            use_reparam=False, use_decoder=False,
+            use_batch_norm=True)
+    m_init = torch.tensor(uncurl_net.M)
+
+    for i in range(10):
+        uncurl_net.pre_train_encoder(X_subset, lr=1e-3, n_epochs=20,
+                log_interval=10)
+        uncurl_net.train_m(X_subset, lr=1e-3, n_epochs=20,
+                log_interval=10)
+    w = uncurl_net.w_net.get_w(X_subset)
+    m = uncurl_net.w_net.get_m()
+    km = KMeans(7)
+    print(w.argmax(1))
+    labels = w.argmax(1).numpy().squeeze()
+    labels_km = km.fit_predict(w)
+    print('nmi after alternating training:', nmi(labels, actual_labels))
+    print('nmi of km after alternating training:', nmi(labels_km, actual_labels))
+
+    m, w, ll = uncurl.poisson_estimate_state(X_subset, clusters=7)
+    print(nmi(actual_labels, w.argmax(0)))
+
+
+    ############# dataset 3: Zeisel full
+
+
+
+
+
+    ############# dataset 4: 10x_8k
+
+
+
+
+
+    ############# dataset 5: Tasic
+

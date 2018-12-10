@@ -14,3 +14,6 @@ lr	weight_decay	momentum	batch_norm	optimizer	batch_size	epochs	use_reparam	use_
 1e-5	0	0	1	Adam	100	250	False	False	-16.4	0.734
 1e-3	0	0	1	Adam	100	150	False	True	5783.5508	0.235
 1e-3	0	0	1	Adam	100	150	True	True	8391.8253	0.000
+
+
+# note: results with separate encoder/decoder training steps??? pre-training W and then training M???
