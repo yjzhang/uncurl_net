@@ -94,7 +94,9 @@ def train_encoder(model, X, output, n_epochs=20, lr=1e-3, weight_decay=0, disp=T
 
 class WEncoder(nn.Module):
 
-    def __init__(self, genes, k, use_reparam=True, use_batch_norm=True):
+    def __init__(self, genes, k, use_reparam=True, use_batch_norm=True,
+            hidden_units=400,
+            hidden_layers=1):
         """
         The W Encoder generates W from the data.
         """
@@ -103,12 +105,20 @@ class WEncoder(nn.Module):
         self.k = k
         self.use_batch_norm = use_batch_norm
         self.use_reparam = use_reparam
-        self.fc1 = nn.Linear(genes, 400)
+        self.hidden_units = hidden_units
+        self.hidden_layers = hidden_layers
+        self.fc1 = nn.Linear(genes, hidden_units)
         if use_batch_norm:
-            self.bn1 = nn.BatchNorm1d(400)
-        self.fc21 = nn.Linear(400, k)
-        #self.bn2 = nn.BatchNorm1d(k)
-        self.fc22 = nn.Linear(400, genes)
+            self.bn1 = nn.BatchNorm1d(hidden_units)
+        self.additional_layers = nn.ModuleList()
+        for i in range(hidden_layers - 1):
+            layer = nn.Linear(hidden_units, hidden_units)
+            self.additional_layers.append(layer)
+            if use_batch_norm:
+                self.additional_layers.append(nn.BatchNorm1d(hidden_units))
+        self.fc21 = nn.Linear(hidden_units, k)
+        if self.use_reparam:
+            self.fc22 = nn.Linear(hidden_units, genes)
 
     def forward(self, x):
         output = self.fc1(x)
@@ -116,6 +126,8 @@ class WEncoder(nn.Module):
             output = F.relu(self.bn1(self.fc1(x)))
         else:
             output = F.relu(self.fc1(x))
+        if self.hidden_layers > 1:
+            output = self.additional_layers(output)
         if self.use_reparam:
             return F.softmax(self.fc21(output)), self.fc22(output)
         else:
@@ -164,6 +176,7 @@ class UncurlNetW(nn.Module):
             use_m_layer=True,
             use_batch_norm=True,
             use_l1=False,
+            hidden_units=400,
             **kwargs):
         """
         This is an autoencoder architecture that learns a mapping from
@@ -188,7 +201,8 @@ class UncurlNetW(nn.Module):
         self.use_m_layer = use_m_layer
         self.use_l1 = use_l1
         # TODO: add batch norm???
-        self.encoder = WEncoder(genes, k, use_reparam, use_batch_norm)
+        self.encoder = WEncoder(genes, k, use_reparam, use_batch_norm,
+                hidden_units=hidden_units)
         if use_m_layer:
             self.m_layer = nn.Linear(k, genes, bias=False)
             self.m_layer.weight.data = M#.transpose(0, 1)
@@ -298,6 +312,12 @@ class UncurlNet(object):
         self.w_net = UncurlNetW(self.genes, self.k, self.M, **kwargs)
         # TODO: set device (cpu or gpu), optimizer
 
+    def get_w(self, data):
+        return self.w_net.get_w(data)
+
+    def get_m(self):
+        return self.w_net.get_m()
+
     @classmethod
     def load(path):
         """
@@ -362,6 +382,23 @@ class UncurlNet(object):
             param.requires_grad = True
         self._train(X, n_epochs, lr, weight_decay, disp, device, log_interval,
                 batch_size)
+
+    def train_1(self, X=None, n_encoder_epochs=20, n_model_epochs=50, **params):
+        """
+        Trains the model, first fitting the encoder and then fitting both M and
+        the encoder.
+        """
+        self.train_encoder(X, n_epochs=n_encoder_epochs, **params)
+        self.train_model(X, n_epochs=n_model_epochs, **params)
+
+    def train_alternating(self, X=None, n_outer_iters=10, n_inner_epochs=10, **params):
+        """
+        Trains the model using alternating minimization, first fitting the W encoder
+        and then fitting M.
+        """
+        for i in range(n_outer_iters):
+            self.train_encoder(X, n_epochs=n_inner_epochs, **params)
+            self.train_model(X, n_epochs=n_inner_epochs, **params)
 
     def _train(self, X=None, n_epochs=20, lr=1e-3, weight_decay=0, disp=True,
             device='cpu', log_interval=1, batch_size=0):
@@ -440,11 +477,17 @@ if __name__ == '__main__':
     print('nmi after training both:', nmi(labels, actual_labels))
     """
 
-    for i in range(10):
-        uncurl_net.pre_train_encoder(X_subset, lr=1e-3, n_epochs=20,
-                log_interval=10)
-        uncurl_net.train_m(X_subset, lr=1e-3, n_epochs=20,
-                log_interval=10)
+    # training regime 1: alternating minimization
+    #for i in range(10):
+    #    uncurl_net.pre_train_encoder(X_subset, lr=1e-3, n_epochs=20,
+    #            log_interval=10)
+    #    uncurl_net.train_m(X_subset, lr=1e-3, n_epochs=20,
+    #            log_interval=10)
+    # training regime 2: pre-train encoder, then train both
+    uncurl_net.pre_train_encoder(X_subset, lr=1e-3, n_epochs=20,
+            log_interval=10)
+    uncurl_net.train_model(X_subset, lr=1e-3, n_epochs=50,
+            log_interval=10)
     w = uncurl_net.w_net.get_w(X_subset).transpose(1, 0)
     m = uncurl_net.w_net.get_m()
     mw = torch.matmul(m, w)
@@ -475,11 +518,15 @@ if __name__ == '__main__':
             use_batch_norm=True)
     m_init = torch.tensor(uncurl_net.M)
 
-    for i in range(10):
-        uncurl_net.pre_train_encoder(X_subset, lr=1e-3, n_epochs=20,
-                log_interval=10)
-        uncurl_net.train_m(X_subset, lr=1e-3, n_epochs=20,
-                log_interval=10)
+    #for i in range(10):
+    #    uncurl_net.pre_train_encoder(X_subset, lr=1e-3, n_epochs=20,
+    #            log_interval=10)
+    #    uncurl_net.train_m(X_subset, lr=1e-3, n_epochs=20,
+    #            log_interval=10)
+    uncurl_net.pre_train_encoder(X_subset, lr=1e-3, n_epochs=20,
+            log_interval=10)
+    uncurl_net.train_model(X_subset, lr=1e-3, n_epochs=50,
+            log_interval=10)
     w = uncurl_net.w_net.get_w(X_subset)
     m = uncurl_net.w_net.get_m()
     km = KMeans(7)
@@ -495,15 +542,59 @@ if __name__ == '__main__':
 
     ############# dataset 3: Zeisel full
 
+    zeisel_mat = scipy.io.loadmat('../uncurl_test_datasets/zeisel/Zeisel.mat')
+    zeisel_data = zeisel_mat['X'].toarray().astype(np.float32).T
+    zeisel_labs = zeisel_mat['true_labs'].flatten()
+    k = len(set(zeisel_labs))
 
+    genes = uncurl.max_variance_genes(zeisel_data, 5, 0.2)
+    X_subset = zeisel_data[genes,:]
+
+    uncurl_net = UncurlNet(X_subset, k,
+            use_reparam=False, use_decoder=False,
+            use_batch_norm=True)
+    m_init = torch.tensor(uncurl_net.M)
+
+    #for i in range(10):
+    #    uncurl_net.pre_train_encoder(X_subset, lr=1e-3, n_epochs=20,
+    #            log_interval=10)
+    #    uncurl_net.train_m(X_subset, lr=1e-3, n_epochs=20,
+    #            log_interval=10)
+    uncurl_net.pre_train_encoder(X_subset, lr=1e-3, n_epochs=20,
+                log_interval=10)
+    uncurl_net.train_model(X_subset, lr=1e-3, n_epochs=50,
+                log_interval=10)
+
+
+    w = uncurl_net.w_net.get_w(X_subset)
+    m = uncurl_net.w_net.get_m()
+    km = KMeans(k)
+    print(w.argmax(1))
+    labels = w.argmax(1).numpy().squeeze()
+    labels_km = km.fit_predict(w)
+    print('nmi after alternating training:', nmi(labels, zeisel_labs))
+    print('nmi of km after alternating training:', nmi(labels_km, zeisel_labs))
+
+    m, w, ll = uncurl.poisson_estimate_state(X_subset, clusters=k)
+    print(nmi(zeisel_labs, w.argmax(0)))
 
 
 
     ############# dataset 4: 10x_8k
+    data = scipy.io.mmread('../uncurl_test_datasets/10x_pure_pooled/data_8000_cells.mtx.gz')
+    actual_labels = np.loadtxt('labels_8000_cells.txt').astype(int).flatten()
 
 
 
 
 
     ############# dataset 5: Tasic
+
+
+
+
+    ############# dataset 6: 
+
+    # TODO: test imputation error as well...
+
 
