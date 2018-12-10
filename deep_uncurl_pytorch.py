@@ -116,6 +116,7 @@ class WEncoder(nn.Module):
             self.additional_layers.append(layer)
             if use_batch_norm:
                 self.additional_layers.append(nn.BatchNorm1d(hidden_units))
+            self.additional_layers.append(nn.ReLU(True))
         self.fc21 = nn.Linear(hidden_units, k)
         if self.use_reparam:
             self.fc22 = nn.Linear(hidden_units, genes)
@@ -127,7 +128,8 @@ class WEncoder(nn.Module):
         else:
             output = F.relu(self.fc1(x))
         if self.hidden_layers > 1:
-            output = self.additional_layers(output)
+            for layer in self.additional_layers:
+                output = layer(output)
         if self.use_reparam:
             return F.softmax(self.fc21(output)), self.fc22(output)
         else:
@@ -459,7 +461,9 @@ if __name__ == '__main__':
 
     uncurl_net = UncurlNet(X_subset, 8,
             use_reparam=False, use_decoder=False,
-            use_batch_norm=True)
+            use_batch_norm=True,
+            hidden_layers=2,
+            hidden_units=100)
     m_init = torch.tensor(uncurl_net.M)
 
     """
