@@ -177,6 +177,7 @@ class UncurlNetW(nn.Module):
             use_batch_norm=True,
             use_l1=False,
             hidden_units=400,
+            hidden_layers=1,
             **kwargs):
         """
         This is an autoencoder architecture that learns a mapping from
@@ -202,7 +203,7 @@ class UncurlNetW(nn.Module):
         self.use_l1 = use_l1
         # TODO: add batch norm???
         self.encoder = WEncoder(genes, k, use_reparam, use_batch_norm,
-                hidden_units=hidden_units)
+                hidden_units=hidden_units, hidden_layers=hidden_layers)
         if use_m_layer:
             self.m_layer = nn.Linear(k, genes, bias=False)
             self.m_layer.weight.data = M#.transpose(0, 1)
