@@ -13,9 +13,10 @@ if __name__ == '__main__':
     import pandas as pd
     import scipy.io
     from purity_analysis import plot_df, build_simple_table
-    data = scipy.io.mmread('../uncurl_test_datasets/10x_pure_pooled/data_8000_cells.mtx.gz')
-    actual_labels = np.loadtxt('labels_8000_cells.txt').astype(int).flatten()
-    k = len(set(actual_labels))
+    data_counts = pd.read_csv('genes_counts.csv')
+    X1 = data_counts.iloc[:,1:].as_matrix()
+    X1 = sparse.csc_matrix(X1)
+    k = 49
     genes = uncurl.max_variance_genes(data, 5, 0.2)
     data_subset = data[genes, :]
 
@@ -24,7 +25,7 @@ if __name__ == '__main__':
     uncurl_net_runner_2_hidden_layers = UncurlNetRunner(k=k, hidden_layers=2, output_names=['UncurlNetW_2_400'])
     uncurl_net_runner_100_units = UncurlNetRunner(k=k, hidden_units=100, hidden_layers=2, output_names=['UncurlNetW_2_100'])
 
-    vis_dir = '10x_8k_vis'
+    vis_dir = 'tasic_vis'
     try:
         os.makedirs(vis_dir)
     except:

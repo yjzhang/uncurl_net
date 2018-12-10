@@ -51,7 +51,7 @@ class UncurlNetRunner(experiment_runner.Preprocess):
             mw = m.dot(w)
             return [w, mw], 0
         else:
-            return w, 0
+            return [w], 0
 
 if __name__ == '__main__':
     import os
