@@ -135,24 +135,6 @@ class WEncoder(nn.Module):
         else:
             return F.softmax(self.fc21(output)), None
 
-    def train_batch(self, x, y, optim):
-        """
-        Trains on a data batch, with the given optimizer...
-        """
-        # TODO: this won't work - this isn't an autoencoder....
-        optim.zero_grad()
-        if self.use_reparam:
-            output, mu, logvar = self(x)
-            loss = loss_function(output, y, mu, logvar)
-            loss.backward()
-        else:
-            output = self(x)
-            loss = F.poisson_nll_loss(output, y, log_input=False, full=False, reduction='sum')
-            loss.backward()
-        optim.step()
-        self.clamp_m()
-        return loss.item()
-
 class WDecoder(nn.Module):
 
     def __init__(self, genes, k, use_reparam=True, use_batch_norm=True):
@@ -177,9 +159,9 @@ class UncurlNetW(nn.Module):
             use_reparam=True,
             use_m_layer=True,
             use_batch_norm=True,
-            use_l1=False,
             hidden_units=400,
             hidden_layers=1,
+            loss='poisson',
             **kwargs):
         """
         This is an autoencoder architecture that learns a mapping from
@@ -192,6 +174,10 @@ class UncurlNetW(nn.Module):
             use_decoder (bool): whether or not to use a decoder layer
             use_reparam (bool): whether or not to  use reparameterization trick
             use_m_layer (bool): whether or not to treat M as a differentiable linear layer
+            use_batch_norm (bool): whether or not to use batch norm in the encoder
+            hidden_units (int): number of hidden units in encoder
+            hidden_layers (int): number of hidden layers in encoder
+            loss (str): 'poisson', 'l1', or 'mse' - specifies loss function.
         """
         super(UncurlNetW, self).__init__()
         self.genes = genes
@@ -202,7 +188,7 @@ class UncurlNetW(nn.Module):
         self.use_reparam = use_reparam
         self.use_batch_norm = use_batch_norm
         self.use_m_layer = use_m_layer
-        self.use_l1 = use_l1
+        self.loss = loss.lower()
         # TODO: add batch norm???
         self.encoder = WEncoder(genes, k, use_reparam, use_batch_norm,
                 hidden_units=hidden_units, hidden_layers=hidden_layers)
@@ -231,7 +217,7 @@ class UncurlNetW(nn.Module):
         # should be a matrix-vector product
         mu = x1
         if self.use_m_layer:
-            mu = F.relu(self.m_layer(x1)) + EPS
+            mu = self.m_layer(x1) + EPS
         else:
             # TODO: will this preserve the correct dimensions???
             mu = torch.matmul(self.M, x1) + EPS
@@ -267,7 +253,12 @@ class UncurlNetW(nn.Module):
             loss.backward()
         else:
             output = self(x) + EPS
-            loss = F.poisson_nll_loss(output, x, log_input=False, full=False, reduction='sum')
+            if self.loss == 'poisson':
+                loss = F.poisson_nll_loss(output, x, log_input=False, full=False, reduction='sum')
+            elif self.loss == 'l1':
+                loss = F.l1_loss(output, x, reduction='sum')
+            elif self.loss == 'mse':
+                loss = F.mse_loss(output, x, reduction='sum')
             loss.backward()
         optim.step()
         self.clamp_m()
@@ -449,6 +440,8 @@ class UncurlNet(object):
 
 if __name__ == '__main__':
     import uncurl
+    from uncurl.state_estimation import objective
+    from uncurl.preprocessing import cell_normalize, log1p
     import scipy.io
     from sklearn.cluster import KMeans
     from sklearn.metrics.cluster import normalized_mutual_info_score as nmi
@@ -459,41 +452,21 @@ if __name__ == '__main__':
     genes = uncurl.max_variance_genes(X, 5, 0.2)
     X_subset = X[genes,:]
 
-    uncurl_net = UncurlNet(X_subset, 8,
+
+    X_log_norm = log1p(cell_normalize(X_subset)).astype(np.float32)
+    uncurl_net = UncurlNet(X_log_norm, 8,
             use_reparam=False, use_decoder=False,
             use_batch_norm=True,
             hidden_layers=2,
-            hidden_units=100)
+            hidden_units=100,
+            loss='mse')
     m_init = torch.tensor(uncurl_net.M)
 
-    """
-    uncurl_net.pre_train_encoder(X_subset, lr=1e-3, n_epochs=10)
-    m = uncurl_net.w_net.get_m()
-    assert((m==m_init).sum() == m.shape[0]*m.shape[1])
-    w = uncurl_net.w_net.get_w(X_subset)
-    labels = w.argmax(1).numpy().squeeze()
-    print('nmi with just training w:', nmi(labels, actual_labels))
-
-    uncurl_net.train_model(X_subset, lr=1e-3, n_epochs=10)
-    w = uncurl_net.w_net.get_w(X_subset)
-    m = uncurl_net.w_net.get_m()
-    print(w.argmax(1))
-    labels = w.argmax(1).numpy().squeeze()
-    print('nmi after training both:', nmi(labels, actual_labels))
-    """
-
-    # training regime 1: alternating minimization
-    #for i in range(10):
-    #    uncurl_net.pre_train_encoder(X_subset, lr=1e-3, n_epochs=20,
-    #            log_interval=10)
-    #    uncurl_net.train_m(X_subset, lr=1e-3, n_epochs=20,
-    #            log_interval=10)
-    # training regime 2: pre-train encoder, then train both
-    uncurl_net.pre_train_encoder(X_subset, lr=1e-3, n_epochs=20,
+    uncurl_net.pre_train_encoder(None, lr=1e-3, n_epochs=20,
             log_interval=10)
-    uncurl_net.train_model(X_subset, lr=1e-3, n_epochs=50,
+    uncurl_net.train_model(None, lr=1e-3, n_epochs=50,
             log_interval=10)
-    w = uncurl_net.w_net.get_w(X_subset).transpose(1, 0)
+    w = uncurl_net.w_net.get_w(X_log_norm).transpose(1, 0)
     m = uncurl_net.w_net.get_m()
     mw = torch.matmul(m, w)
     km = KMeans(8)
@@ -506,9 +479,11 @@ if __name__ == '__main__':
     print('nmi of km(mw) after alternating training:', nmi(labels_km_mw, actual_labels))
     labels_km_x_subset = km.fit_predict(X_subset.T)
     print('nmi of km(x_subset):', nmi(labels_km_x_subset, actual_labels))
+    print('ll of uncurlnet:', objective(X_subset, m.numpy(), w.numpy()))
 
     m, w, ll = uncurl.poisson_estimate_state(X_subset, clusters=8)
     print(nmi(actual_labels, w.argmax(0)))
+    print('ll of uncurl:', ll)
 
     ############# dataset 2: Zeisel subset
 
@@ -518,21 +493,17 @@ if __name__ == '__main__':
     genes = uncurl.max_variance_genes(X, 5, 0.2)
     X_subset = X[genes,:]
 
-    uncurl_net = UncurlNet(X_subset, 7,
+    X_log_norm = log1p(cell_normalize(X_subset)).astype(np.float32)
+    uncurl_net = UncurlNet(X_log_norm, 7,
             use_reparam=False, use_decoder=False,
-            use_batch_norm=True)
+            use_batch_norm=True,
+            loss='mse')
     m_init = torch.tensor(uncurl_net.M)
-
-    #for i in range(10):
-    #    uncurl_net.pre_train_encoder(X_subset, lr=1e-3, n_epochs=20,
-    #            log_interval=10)
-    #    uncurl_net.train_m(X_subset, lr=1e-3, n_epochs=20,
-    #            log_interval=10)
-    uncurl_net.pre_train_encoder(X_subset, lr=1e-3, n_epochs=20,
+    uncurl_net.pre_train_encoder(X_log_norm, lr=1e-3, n_epochs=20,
             log_interval=10)
-    uncurl_net.train_model(X_subset, lr=1e-3, n_epochs=50,
+    uncurl_net.train_model(X_log_norm, lr=1e-3, n_epochs=50,
             log_interval=10)
-    w = uncurl_net.w_net.get_w(X_subset)
+    w = uncurl_net.w_net.get_w(X_log_norm)
     m = uncurl_net.w_net.get_m()
     km = KMeans(7)
     print(w.argmax(1))
@@ -554,24 +525,20 @@ if __name__ == '__main__':
 
     genes = uncurl.max_variance_genes(zeisel_data, 5, 0.2)
     X_subset = zeisel_data[genes,:]
+    X_log_norm = log1p(cell_normalize(X_subset)).astype(np.float32)
 
-    uncurl_net = UncurlNet(X_subset, k,
+    uncurl_net = UncurlNet(X_log_norm, k,
             use_reparam=False, use_decoder=False,
             use_batch_norm=True)
     m_init = torch.tensor(uncurl_net.M)
 
-    #for i in range(10):
-    #    uncurl_net.pre_train_encoder(X_subset, lr=1e-3, n_epochs=20,
-    #            log_interval=10)
-    #    uncurl_net.train_m(X_subset, lr=1e-3, n_epochs=20,
-    #            log_interval=10)
-    uncurl_net.pre_train_encoder(X_subset, lr=1e-3, n_epochs=20,
+    uncurl_net.pre_train_encoder(X_log_norm, lr=1e-3, n_epochs=20,
                 log_interval=10)
-    uncurl_net.train_model(X_subset, lr=1e-3, n_epochs=50,
+    uncurl_net.train_model(X_log_norm, lr=1e-3, n_epochs=50,
                 log_interval=10)
 
 
-    w = uncurl_net.w_net.get_w(X_subset)
+    w = uncurl_net.w_net.get_w(X_log_norm)
     m = uncurl_net.w_net.get_m()
     km = KMeans(k)
     print(w.argmax(1))
