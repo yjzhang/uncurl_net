@@ -254,7 +254,7 @@ class UncurlNetW(nn.Module):
         else:
             output = self(x) + EPS
             if self.loss == 'poisson':
-                loss = F.poisson_nll_loss(output, x, log_input=False, full=False, reduction='sum')
+                loss = F.poisson_nll_loss(output, x, log_input=False, full=True, reduction='sum')
             elif self.loss == 'l1':
                 loss = F.l1_loss(output, x, reduction='sum')
             elif self.loss == 'mse':
@@ -412,7 +412,8 @@ class UncurlNet(object):
         if X is not None:
             self.X = X
         if batch_size == 0:
-            batch_size = max(100, int(self.X.shape[1]/20))
+            batch_size = 100
+            #batch_size = max(100, int(self.X.shape[1]/20))
         data_loader = torch.utils.data.DataLoader(self.X.T,
                 batch_size=batch_size,
                 shuffle=True)
@@ -458,7 +459,7 @@ if __name__ == '__main__':
             use_reparam=False, use_decoder=False,
             use_batch_norm=True,
             hidden_layers=2,
-            hidden_units=100,
+            hidden_units=200,
             loss='mse')
     m_init = torch.tensor(uncurl_net.M)
 
@@ -554,8 +555,38 @@ if __name__ == '__main__':
 
     ############# dataset 4: 10x_8k
     data = scipy.io.mmread('../uncurl_test_datasets/10x_pure_pooled/data_8000_cells.mtx.gz')
-    actual_labels = np.loadtxt('labels_8000_cells.txt').astype(int).flatten()
+    data = data.toarray()
+    actual_labels = np.loadtxt('../uncurl_test_datasets/10x_pure_pooled/labels_8000_cells.txt').astype(int).flatten()
+    genes = uncurl.max_variance_genes(data, 5, 0.2)
+    X_subset = data[genes,:]
 
+    X_log_norm = log1p(cell_normalize(X_subset)).astype(np.float32)
+    uncurl_net = UncurlNet(X_log_norm, 8,
+            use_reparam=False, use_decoder=False,
+            use_batch_norm=True,
+            hidden_layers=1,
+            hidden_units=400,
+            loss='mse')
+    m_init = torch.tensor(uncurl_net.M)
+
+    uncurl_net.pre_train_encoder(None, lr=1e-3, n_epochs=20,
+            log_interval=10)
+    uncurl_net.train_model(None, lr=1e-3, n_epochs=50,
+            log_interval=10)
+    w = uncurl_net.w_net.get_w(X_log_norm).transpose(1, 0)
+    m = uncurl_net.w_net.get_m()
+    mw = torch.matmul(m, w)
+    km = KMeans(8)
+    print(w.argmax(0))
+    labels = w.argmax(0).numpy().squeeze()
+    labels_km = km.fit_predict(w.transpose(1, 0))
+    labels_km_mw = km.fit_predict(mw.transpose(1, 0))
+    print('nmi after alternating training:', nmi(labels, actual_labels))
+    print('nmi of km(w) after alternating training:', nmi(labels_km, actual_labels))
+    print('nmi of km(mw) after alternating training:', nmi(labels_km_mw, actual_labels))
+    labels_km_x_subset = km.fit_predict(X_subset.T)
+    print('nmi of km(x_subset):', nmi(labels_km_x_subset, actual_labels))
+    print('ll of uncurlnet:', objective(X_subset, m.numpy().astype(np.double), w.numpy().astype(np.double)))
 
 
 

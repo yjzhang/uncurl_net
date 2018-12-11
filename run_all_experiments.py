@@ -18,7 +18,7 @@ if __name__ == '__main__':
     data_counts = pd.read_csv('../uncurl_test_datasets/tasic_allen_brain_map/genes_counts.csv')
     X1 = data_counts.iloc[:,1:].as_matrix()
     X1 = sparse.csc_matrix(X1)
-    cell_classification = pd.read_csv('cell_classification.csv')
+    cell_classification = pd.read_csv('../uncurl_test_datasets/tasic_allen_brain_map/cell_classification.csv')
     actual_labels = cell_classification.primary
 
     k = 49

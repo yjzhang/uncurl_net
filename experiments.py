@@ -13,6 +13,7 @@ class UncurlNetRunner(experiment_runner.Preprocess):
             hidden_units=400,
             hidden_layers=1,
             train_method='1',
+            loss='poisson',
             return_mw=False,
             **params):
         self.k = k
@@ -22,6 +23,7 @@ class UncurlNetRunner(experiment_runner.Preprocess):
         self.hidden_units = hidden_units
         self.hidden_layers = hidden_layers
         self.train_method = train_method
+        self.loss = loss
         self.return_mw = return_mw
         self.output_names = ['UncurlNetW']
         if self.return_mw:
@@ -38,7 +40,8 @@ class UncurlNetRunner(experiment_runner.Preprocess):
                 use_decoder=self.use_decoder,
                 use_batch_norm=self.use_batch_norm,
                 hidden_units=self.hidden_units,
-                hidden_layers=self.hidden_layers)
+                hidden_layers=self.hidden_layers,
+                loss=self.loss)
         if self.train_method == '1':
             uncurl_net.train_1(data, **self.params)
         elif self.train_method == 'alternating':
