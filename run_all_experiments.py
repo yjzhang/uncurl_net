@@ -25,7 +25,9 @@ if __name__ == '__main__':
     genes = uncurl.max_variance_genes(X1, 5, 0.2)
     data_subset = X1[genes, :]
 
-    uncurl_net_runner = UncurlNetRunner(k=k)
+    log = uncurl.experiment_runner.Log()
+    log_norm = uncurl.experiment_runner.LogNorm()
+    uncurl_net_runner = UncurlNetRunner(k=k, loss='mse')
     uncurl_runner = experiment_runner.PoissonSE(clusters=k)
     uncurl_net_runner_2_hidden_layers = UncurlNetRunner(k=k, hidden_layers=2, output_names=['UncurlNetW_2_400'])
     uncurl_net_runner_100_units = UncurlNetRunner(k=k, hidden_units=100, hidden_layers=2, output_names=['UncurlNetW_2_100'])
@@ -42,9 +44,10 @@ if __name__ == '__main__':
     argmax = experiment_runner.Argmax(n_classes=k)
 
     methods = [
-            (uncurl_net_runner, [argmax, km, tsne_km]),
-            (uncurl_net_runner_2_hidden_layers, [argmax, km, tsne_km]),
-            (uncurl_net_runner_100_units, [argmax, km, tsne_km]),
+            ([log, uncurl_net_runner], [argmax, km, tsne_km]),
+            ([log_norm, uncurl_net_runner], [argmax, km, tsne_km]),
+            ([log_norm, uncurl_net_runner_2_hidden_layers], [argmax, km, tsne_km]),
+            ([log_norm, uncurl_net_runner_100_units], [argmax, km, tsne_km]),
             (uncurl_runner, [argmax, km, tsne_km]),
     ]
     print('generating visualizations')
@@ -96,9 +99,10 @@ if __name__ == '__main__':
     argmax = experiment_runner.Argmax(n_classes=k)
 
     methods = [
-            (uncurl_net_runner, [argmax, km, tsne_km]),
-            (uncurl_net_runner_2_hidden_layers, [argmax, km, tsne_km]),
-            (uncurl_net_runner_100_units, [argmax, km, tsne_km]),
+            ([log, uncurl_net_runner], [argmax, km, tsne_km]),
+            ([log_norm, uncurl_net_runner], [argmax, km, tsne_km]),
+            ([log_norm, uncurl_net_runner_2_hidden_layers], [argmax, km, tsne_km]),
+            ([log_norm, uncurl_net_runner_100_units], [argmax, km, tsne_km]),
             (uncurl_runner, [argmax, km, tsne_km]),
     ]
     print('generating visualizations')
