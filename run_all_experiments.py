@@ -30,6 +30,7 @@ if __name__ == '__main__':
     uncurl_net_runner = UncurlNetRunner(k=k, loss='mse')
     uncurl_runner = experiment_runner.PoissonSE(clusters=k)
     uncurl_net_runner_2_hidden_layers = UncurlNetRunner(k=k, hidden_layers=2, loss='mse', output_names=['UncurlNetW_2_400'])
+    uncurl_net_runner_2_hidden_layers_2 = UncurlNetRunner(k=k, hidden_layers=2, loss='mse', n_model_epochs=100, output_names=['UncurlNetW_2_400_100iters'])
     uncurl_net_runner_100_units = UncurlNetRunner(k=k, hidden_units=100, hidden_layers=2, loss='mse', output_names=['UncurlNetW_2_100'])
 
     vis_dir = 'tasic_vis'
@@ -47,8 +48,9 @@ if __name__ == '__main__':
             ([log, uncurl_net_runner], [argmax, km, tsne_km]),
             ([log_norm, uncurl_net_runner], [argmax, km, tsne_km]),
             ([log_norm, uncurl_net_runner_2_hidden_layers], [argmax, km, tsne_km]),
+            ([log_norm, uncurl_net_runner_2_hidden_layers_2], [argmax, km, tsne_km]),
             ([log_norm, uncurl_net_runner_100_units], [argmax, km, tsne_km]),
-            (uncurl_runner, [argmax, km, tsne_km]),
+            #(uncurl_runner, [argmax, km, tsne_km]),
     ]
     print('generating visualizations')
     uncurl.experiment_runner.generate_visualizations(methods, data_subset, actual_labels, base_dir=vis_dir, figsize=(16,9), s=5, alpha=0.5)
@@ -59,11 +61,8 @@ if __name__ == '__main__':
     # save data as tsv
     df = pd.DataFrame(data=results, columns=names)
 
-    tsv_filename = 'nmi_tasic_uncurl_net.tsv'.format(data_subset.shape[1], len(genes))
-    if os.path.exists(tsv_filename):
-        txt = df.to_csv(sep='\t', index=False, header=False)
-    else:
-        df.to_csv(tsv_filename, sep='\t', index=False)
+    tsv_filename = 'nmi_tasic_uncurl_net_2.tsv'.format(data_subset.shape[1], len(genes))
+    df.to_csv(tsv_filename, sep='\t', index=False)
     # plot
     build_simple_table(tsv_filename, tsv_filename.split('.')[0]+'.png', metric='NMI')
     # timing
@@ -85,6 +84,7 @@ if __name__ == '__main__':
     uncurl_net_runner = UncurlNetRunner(k=k, loss='mse')
     uncurl_runner = experiment_runner.PoissonSE(clusters=k)
     uncurl_net_runner_2_hidden_layers = UncurlNetRunner(k=k, hidden_layers=2, loss='mse', output_names=['UncurlNetW_2_400'])
+    uncurl_net_runner_2_hidden_layers_2 = UncurlNetRunner(k=k, hidden_layers=2, loss='mse', n_model_epochs=100, output_names=['UncurlNetW_2_400_100iters'])
     uncurl_net_runner_100_units = UncurlNetRunner(k=k, hidden_units=100, hidden_layers=2, loss='mse', output_names=['UncurlNetW_2_100'])
 
     vis_dir = 'zeisel_vis'
@@ -102,8 +102,9 @@ if __name__ == '__main__':
             ([log, uncurl_net_runner], [argmax, km, tsne_km]),
             ([log_norm, uncurl_net_runner], [argmax, km, tsne_km]),
             ([log_norm, uncurl_net_runner_2_hidden_layers], [argmax, km, tsne_km]),
+            ([log_norm, uncurl_net_runner_2_hidden_layers_2], [argmax, km, tsne_km]),
             ([log_norm, uncurl_net_runner_100_units], [argmax, km, tsne_km]),
-            (uncurl_runner, [argmax, km, tsne_km]),
+            #(uncurl_runner, [argmax, km, tsne_km]),
     ]
     print('generating visualizations')
     uncurl.experiment_runner.generate_visualizations(methods, data_subset, actual_labels, base_dir=vis_dir, figsize=(16,9), s=5, alpha=0.5)
@@ -114,11 +115,8 @@ if __name__ == '__main__':
     # save data as tsv
     df = pd.DataFrame(data=results, columns=names)
 
-    tsv_filename = 'nmi_zeisel_uncurl_net.tsv'.format(data_subset.shape[1], len(genes))
-    if os.path.exists(tsv_filename):
-        txt = df.to_csv(sep='\t', index=False, header=False)
-    else:
-        df.to_csv(tsv_filename, sep='\t', index=False)
+    tsv_filename = 'nmi_zeisel_uncurl_net_2.tsv'.format(data_subset.shape[1], len(genes))
+    df.to_csv(tsv_filename, sep='\t', index=False)
     # plot
     build_simple_table(tsv_filename, tsv_filename.split('.')[0]+'.png', metric='NMI')
     # timing
