@@ -29,8 +29,8 @@ if __name__ == '__main__':
     log_norm = uncurl.experiment_runner.LogNorm()
     uncurl_net_runner = UncurlNetRunner(k=k, loss='mse')
     uncurl_runner = experiment_runner.PoissonSE(clusters=k)
-    uncurl_net_runner_2_hidden_layers = UncurlNetRunner(k=k, hidden_layers=2, output_names=['UncurlNetW_2_400'])
-    uncurl_net_runner_100_units = UncurlNetRunner(k=k, hidden_units=100, hidden_layers=2, output_names=['UncurlNetW_2_100'])
+    uncurl_net_runner_2_hidden_layers = UncurlNetRunner(k=k, hidden_layers=2, loss='mse', output_names=['UncurlNetW_2_400'])
+    uncurl_net_runner_100_units = UncurlNetRunner(k=k, hidden_units=100, hidden_layers=2, loss='mse', output_names=['UncurlNetW_2_100'])
 
     vis_dir = 'tasic_vis'
     try:
@@ -82,10 +82,10 @@ if __name__ == '__main__':
     genes = uncurl.max_variance_genes(X1, 5, 0.2)
     data_subset = X1[genes, :]
 
-    uncurl_net_runner = UncurlNetRunner(k=k)
+    uncurl_net_runner = UncurlNetRunner(k=k, loss='mse')
     uncurl_runner = experiment_runner.PoissonSE(clusters=k)
-    uncurl_net_runner_2_hidden_layers = UncurlNetRunner(k=k, hidden_layers=2, output_names=['UncurlNetW_2_400'])
-    uncurl_net_runner_100_units = UncurlNetRunner(k=k, hidden_units=100, hidden_layers=2, output_names=['UncurlNetW_2_100'])
+    uncurl_net_runner_2_hidden_layers = UncurlNetRunner(k=k, hidden_layers=2, loss='mse', output_names=['UncurlNetW_2_400'])
+    uncurl_net_runner_100_units = UncurlNetRunner(k=k, hidden_units=100, hidden_layers=2, loss='mse', output_names=['UncurlNetW_2_100'])
 
     vis_dir = 'zeisel_vis'
     try:
