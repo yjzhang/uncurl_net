@@ -265,6 +265,9 @@ class UncurlNetW(nn.Module):
         return loss.item()
 
     def get_w(self, X):
+        """
+        X is a dense array or tensor of shape gene x cell.
+        """
         self.eval()
         X_tensor = torch.tensor(X.T, dtype=torch.float32)
         encode_results = self.encode(X_tensor)
@@ -320,7 +323,13 @@ class UncurlNet(object):
         # TODO
 
     def save(self, path):
+        """
+        Saves a model to a path...
+        """
         # TODO
+        import pickle
+        with open(path, 'wb') as f:
+            pass
         pass
 
     def preprocess(self):
@@ -436,6 +445,11 @@ class UncurlNet(object):
                     epoch, train_loss / len(data_loader.dataset)))
 
 
+    def get_mw(self, data):
+        """
+        """
+        # TODO
+        # gets MW for data denoising and imputation
 
 
 
