@@ -307,7 +307,7 @@ class UncurlNet(object):
         self.k = k
         # initialize M and W using uncurl's initialization
         self.w_net = UncurlNetW(self.genes, self.k, self.M, **kwargs)
-        # TODO: set device (cpu or gpu), optimizer
+        # TODO: set device (cpu or gpu), optimizer, # of threads
 
     def get_w(self, data):
         return self.w_net.get_w(data)
@@ -315,22 +315,21 @@ class UncurlNet(object):
     def get_m(self):
         return self.w_net.get_m()
 
-    @classmethod
-    def load(path):
+    def load(self, path):
         """
-        loads an UncurlNet object from file.
+        loads an UncurlNetW object from file.
         """
         # TODO
+        w_net = torch.load(path)
+        self.w_net = w_net
+
 
     def save(self, path):
         """
         Saves a model to a path...
         """
-        # TODO
-        import pickle
-        with open(path, 'wb') as f:
-            pass
-        pass
+        # TODO: save only model parameters, or save the whole model?
+        torch.save(self.w_net, path)
 
     def preprocess(self):
         """
@@ -447,9 +446,13 @@ class UncurlNet(object):
 
     def get_mw(self, data):
         """
+        Returns a numpy array representing MW.
         """
-        # TODO
         # gets MW for data denoising and imputation
+        m = self.get_m()
+        w = self.get_w(data).transpose(1, 0)
+        mw = torch.matmul(m, w)
+        return mw.numpy()
 
 
 

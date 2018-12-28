@@ -455,3 +455,30 @@ if __name__ == '__main__':
     import scipy.io
     from sklearn.cluster import KMeans
     from sklearn.metrics.cluster import normalized_mutual_info_score as nmi
+    import pandas as pd
+
+    table_seqwell = pd.read_table('../uncurl_test_datasets/batch_effects_seurat/IntegratedAnalysis_ExpressionMatrices/pbmc_SeqWell.expressionMatrix.txt.gz')
+    table_10x = pd.read_table('../uncurl_test_datasets/batch_effects_seurat/IntegratedAnalysis_ExpressionMatrices/pbmc_10X.expressionMatrix.txt.gz')
+
+    genes_seqwell = table_seqwell.index
+    genes_10x = table_10x.index
+
+    genes_set = set(genes_seqwell).intersection(genes_10x)
+
+    genes_list = list(genes_set)
+    data_seqwell = table_seqwell.loc[genes_list].values
+    data_10x = table_10x.loc[genes_list].values
+
+    batch_list = [0]*data_seqwell.shape[1]
+    batch_list += [1]*data_10x.shape[1]
+
+    data_total = np.hstack([data_seqwell, data_10x])
+
+    # TODO: create networks
+    net1 = UncurlNet(data_total, 20,
+            use_reparam=False, use_decoder=False,
+            use_batch_norm=True,
+            hidden_layers=1,
+            hidden_units=400,
+            num_batches=2,
+            loss='mse')
