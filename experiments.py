@@ -68,6 +68,7 @@ if __name__ == '__main__':
     genes = uncurl.max_variance_genes(data, 5, 0.2)
     data_subset = data[genes, :]
 
+    # TODO: add experiment for NMF
     log = uncurl.experiment_runner.Log()
     log_norm = uncurl.experiment_runner.LogNorm()
     uncurl_net_runner = UncurlNetRunner(k=k, loss='mse')

@@ -1,3 +1,5 @@
+from scipy import sparse
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -12,6 +14,34 @@ import os
 
 EPS = 1e-10
 
+class BatchDataset(torch.utils.data.Dataset):
+    # This class defines a dataset that consists of
+    # a data matrix along with a list of ints indicating
+    # which batch each cell belongs to.
+
+    def __init__(self, X, batches, **params):
+        """
+        X should be able to be a dense or sparse array of shape
+        cells x genes.
+        """
+        super(BatchDataset, self).__init__()
+        self.data_matrix = X
+        self.batches = batches
+        self.is_sparse = sparse.issparse(X)
+
+    def __len__(self):
+        return self.data_matrix.shape[0]
+
+    def __getitem__(self, idx):
+        # returns a tuple (x, batch_id)
+        # where x is a tensor and batch_id is an int
+        x = self.data_matrix[idx, :]
+        if self.is_sparse:
+            x = torch.tensor(x.toarray().flatten(), dtype=torch.float32)
+        else:
+            x = torch.tensor(x, dtype=torch.float32)
+        return (x, self.batches[idx])
+
 
 # https://github.com/pytorch/examples/blob/master/vae/main.py
 # Reconstruction + KL divergence losses summed over all elements and batch
@@ -25,47 +55,6 @@ def loss_function(recon_x, x, mu, logvar):
     # 0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
     KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
     return BCE + KLD
-
-
-# TODO: implement a sparse Poisson loss
-def train_encoder(model, X, output, n_epochs=20, lr=1e-3, weight_decay=0, disp=True,
-        device='cpu', log_interval=1, batch_size=0,
-        optim=torch.optim.Adam, **kwargs):
-    """
-    trains an autoencoder network...
-
-    Args:
-        n_epochs:
-    """
-    if batch_size == 0:
-        batch_size = max(100, int(X.shape[1]/20))
-    data_loader = torch.utils.data.DataLoader(X.T,
-            batch_size=batch_size,
-            shuffle=True)
-    #optimizer = torch.optim.SparseAdam(lr=lr, weight_decay=weight_decay)
-    optimizer = torch.optim.Adam(params=model.parameters(),
-            lr=lr, weight_decay=weight_decay)
-    for epoch in range(n_epochs):
-        train_loss = 0.0
-        for batch_idx, data in enumerate(data_loader):
-            data = data.to(device)
-            optimizer.zero_grad()
-            if hasattr(model, 'train_batch'):
-                loss = model.train_batch(data, optimizer)
-            else:
-                output = model(data)
-                loss = F.mse_loss(output, data)
-            if disp and (batch_idx % log_interval == 0):
-                print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                        epoch, batch_idx * len(data), len(data_loader.dataset),
-                        100. * batch_idx / len(data_loader),
-                        loss / len(data)))
-            train_loss += loss
-        if disp:
-            print('====> Epoch: {} Average loss: {:.4f}'.format(
-                epoch, train_loss / len(data_loader.dataset)))
-
-
 
 
 class WEncoderMultibatch(nn.Module):
@@ -92,7 +81,6 @@ class WEncoderMultibatch(nn.Module):
         self.encoder_layers = nn.ModuleList()
         for batch in range(self.num_batches):
             encoder = []
-            pass
             fc1 = nn.Linear(genes, hidden_units)
             encoder.append(fc1)
             if use_batch_norm:
@@ -116,12 +104,15 @@ class WEncoderMultibatch(nn.Module):
         batches is a vector of integers with the same length as x,
         indicating the batch from which each data point originates.
         """
-        total_output = torch.tensor(x)
+        total_output = torch.zeros((x.shape[0], self.hidden_units),
+                dtype=torch.float32)
         for i in range(self.num_batches):
             batch_index_i = (batches == i)
             output = x[batch_index_i, :]
+            if len(output) == 0:
+                continue
             output = self.encoder_layers[i](output)
-            total_output[batch_index_i] = output[batch_index_i]
+            total_output[batch_index_i, :] = output
         if self.use_reparam:
             return F.softmax(self.fc21(total_output)), self.fc22(total_output)
         else:
@@ -246,7 +237,7 @@ class UncurlNetW(nn.Module):
             loss = loss_function(output, x, mu, logvar)
             loss.backward()
         else:
-            output = self(x) + EPS
+            output = self.forward(x, batches) + EPS
             if self.loss == 'poisson':
                 loss = F.poisson_nll_loss(output, x, log_input=False, full=True, reduction='sum')
             elif self.loss == 'l1':
@@ -258,13 +249,14 @@ class UncurlNetW(nn.Module):
         self.clamp_m()
         return loss.item()
 
-    def get_w(self, X):
+    def get_w(self, X, batches=None):
         """
         X is a dense array or tensor of shape gene x cell.
         """
         self.eval()
         X_tensor = torch.tensor(X.T, dtype=torch.float32)
-        encode_results = self.encode(X_tensor)
+        # TODO: create stuff
+        encode_results = self.encode(X_tensor, batches)
         return encode_results[0].detach()
         #data_loader = torch.utils.data.DataLoader(X.T,
         #        batch_size=X.shape[1],
@@ -345,6 +337,7 @@ class UncurlNet(object):
         """
         pre-trains the encoder for w_net - fixing M.
         """
+        # sets the network to train mode
         self.w_net.train()
         for param in self.w_net.encoder.parameters():
             param.requires_grad = True
@@ -403,6 +396,7 @@ class UncurlNet(object):
 
         Args:
             X (array): genes x cells
+            batches (array or list): list of batch indices for each cell
             n_epochs: number of epochs to train for
             lr (float): learning rate
             weight_decay (float)
@@ -416,17 +410,20 @@ class UncurlNet(object):
         if batch_size == 0:
             batch_size = 100
             #batch_size = max(100, int(self.X.shape[1]/20))
-        data_loader = torch.utils.data.DataLoader(self.X.T,
+        dataset = BatchDataset(X.T, batches)
+        data_loader = torch.utils.data.DataLoader(dataset,
                 batch_size=batch_size,
                 shuffle=True)
         #optimizer = torch.optim.SparseAdam(lr=lr, weight_decay=weight_decay)
         optimizer = torch.optim.Adam(params=self.w_net.parameters(),
                 lr=lr, weight_decay=weight_decay)
+        # TODO: include batches
         for epoch in range(n_epochs):
             train_loss = 0.0
             for batch_idx, data in enumerate(data_loader):
+                data, b  = data
                 data = data.to(device)
-                loss = self.w_net.train_batch(data, optimizer)
+                loss = self.w_net.train_batch(data, optimizer, b)
                 if disp and (batch_idx % log_interval == 0):
                     print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                             epoch, batch_idx * len(data), len(data_loader.dataset),
@@ -473,12 +470,21 @@ if __name__ == '__main__':
     batch_list += [1]*data_10x.shape[1]
 
     data_total = np.hstack([data_seqwell, data_10x])
+    X_log_norm = log1p(cell_normalize(data_total)).astype(np.float32)
+
 
     # TODO: create networks
-    net1 = UncurlNet(data_total, 20,
+    net1 = UncurlNet(X_log_norm, 10,
             use_reparam=False, use_decoder=False,
             use_batch_norm=True,
-            hidden_layers=1,
+            hidden_layers=2,
             hidden_units=400,
             num_batches=2,
             loss='mse')
+
+    net1.train_1(X_log_norm, batch_list, log_interval=10)
+    # TODO: test clustering?
+    w = net1.w_net.get_w(X_log_norm, batch_list)
+
+    # TODO: compare to non-multibatch, run tsne, ...
+
