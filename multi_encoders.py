@@ -104,15 +104,21 @@ class WEncoderMultibatch(nn.Module):
         batches is a vector of integers with the same length as x,
         indicating the batch from which each data point originates.
         """
-        total_output = torch.zeros((x.shape[0], self.hidden_units),
-                dtype=torch.float32)
+        outputs = []
+        inverse_indices = np.zeros(x.shape[0], dtype=int)
+        num_units = 0
         for i in range(self.num_batches):
             batch_index_i = (batches == i)
             output = x[batch_index_i, :]
             if len(output) == 0:
                 continue
+            indices = batch_index_i.nonzero().flatten()
+            inverse_indices[indices] = range(num_units, num_units + output.shape[0])
+            num_units += output.shape[0]
             output = self.encoder_layers[i](output)
-            total_output[batch_index_i, :] = output
+            outputs.append(output)
+        total_output = torch.cat(outputs)
+        total_output = total_output[inverse_indices]
         if self.use_reparam:
             return F.softmax(self.fc21(total_output)), self.fc22(total_output)
         else:
@@ -204,7 +210,6 @@ class UncurlNetW(nn.Module):
         if self.use_m_layer:
             mu = self.m_layer(x1) + EPS
         else:
-            # TODO: will this preserve the correct dimensions???
             mu = torch.matmul(self.M, x1) + EPS
         if self.use_reparam:
             z = self.reparameterize(mu, logvar)
@@ -213,6 +218,7 @@ class UncurlNetW(nn.Module):
             else:
                 return z, mu, logvar
         else:
+            # TODO: add a batch-specific layer at the very end???
             if self.use_decoder:
                 return self.decode(mu)
             else:
