@@ -5,6 +5,8 @@ import torch.utils.data
 
 from uncurl.state_estimation import initialize_means_weights
 
+from nn_utils import loss_function
+
 import numpy as np
 import os
 
@@ -36,20 +38,6 @@ def poisson_loss(outputs, labels):
     log_output = torch.log(outputs)
     # TODO: should this be sum or mean?
     return torch.mean(torch.sum(outputs - labels*log_output, 1))
-
-
-# https://github.com/pytorch/examples/blob/master/vae/main.py
-# Reconstruction + KL divergence losses summed over all elements and batch
-def loss_function(recon_x, x, mu, logvar):
-    #BCE = poisson_loss(recon_x, x)
-    BCE = F.poisson_nll_loss(recon_x, x, log_input=False, full=False, reduction='sum')
-    #BCE = F.binary_cross_entropy(recon_x, x.view(-1, 784), reduction='sum')
-    # see Appendix B from VAE paper:
-    # Kingma and Welling. Auto-Encoding Variational Bayes. ICLR, 2014
-    # https://arxiv.org/abs/1312.6114
-    # 0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
-    KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-    return BCE + KLD
 
 
 def train_encoder(model, X, output, n_epochs=20, lr=1e-3, weight_decay=0, disp=True,
@@ -88,7 +76,6 @@ def train_encoder(model, X, output, n_epochs=20, lr=1e-3, weight_decay=0, disp=T
         if disp:
             print('====> Epoch: {} Average loss: {:.4f}'.format(
                 epoch, train_loss / len(data_loader.dataset)))
-
 
 
 
