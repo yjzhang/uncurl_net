@@ -1,10 +1,12 @@
 # classes for Datasets and various helpers for loading different data formats,
 # as well as various common functions useful for nn models.
 
+import numpy as np
 from scipy import sparse
 
 import torch
 import torch.utils.data
+import torch.nn
 from torch.nn import functional as F
 
 
@@ -71,3 +73,33 @@ class BatchDataset(torch.utils.data.Dataset):
         else:
             x = torch.tensor(x, dtype=torch.float32)
         return (x, self.batches[idx])
+
+class ElementWiseLayer(torch.nn.Module):
+    """
+    Element-wise multiplication + bias
+    """
+
+    def __init__(self, n_units, rectify=True, use_bias=True):
+        super(ElementWiseLayer, self).__init__()
+        self.n_units = n_units
+        self.rectify = rectify
+        self.use_bias = use_bias
+        self.weight = torch.nn.Parameter(torch.rand(n_units)*2)
+        if use_bias:
+            self.bias = torch.nn.Parameter(torch.randn(n_units)/2)
+
+    def forward(self, x):
+        output = self.weight*x
+        if self.use_bias:
+            output += self.bias
+        if self.rectify:
+            output[output < 0] = 0
+        return output
+
+class IdentityLayer(torch.nn.Module):
+
+    def __init__(self):
+        super(IdentityLayer, self).__init__()
+
+    def forward(self, x):
+        return x

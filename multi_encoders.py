@@ -9,7 +9,8 @@ import torch.utils.data
 
 from uncurl.state_estimation import initialize_means_weights
 
-from nn_utils import BatchDataset, loss_function
+from nn_utils import BatchDataset, loss_function, ElementWiseLayer,\
+        IdentityLayer
 
 
 # A multi-encoder architecture for batch effect correction
@@ -137,6 +138,7 @@ class UncurlNetW(nn.Module):
         self.use_batch_norm = use_batch_norm
         self.use_m_layer = use_m_layer
         self.loss = loss.lower()
+        self.num_batches = num_batches
         self.encoder = WEncoderMultibatch(genes, k, num_batches,
                 use_reparam, use_batch_norm,
                 hidden_units=hidden_units, hidden_layers=hidden_layers)
@@ -147,6 +149,13 @@ class UncurlNetW(nn.Module):
             self.decoder = WDecoder(genes, k, use_reparam, use_batch_norm)
         else:
             self.decoder = None
+        # batch correction layers
+        # batch 0 is always the identity layer
+        self.correction_layers = nn.ModuleList()
+        self.correction_layers.append(IdentityLayer())
+        for b in range(num_batches - 1):
+            correction = ElementWiseLayer(self.genes)
+            self.correction_layers.append(correction)
 
     def encode(self, x, batch):
         # returns two things: mu and logvar
@@ -160,6 +169,27 @@ class UncurlNetW(nn.Module):
         eps = torch.randn_like(std)
         return eps.mul(std).add_(mu)
 
+    def apply_correction(self, x, batches):
+        """
+        Applies the batch correction layers...
+        """
+        outputs = []
+        inverse_indices = np.zeros(x.shape[0], dtype=int)
+        num_units = 0
+        for i in range(0, self.num_batches):
+            batch_index_i = (batches == i)
+            output = x[batch_index_i, :]
+            if len(output) == 0:
+                continue
+            indices = batch_index_i.nonzero().flatten()
+            inverse_indices[indices] = range(num_units, num_units + output.shape[0])
+            num_units += output.shape[0]
+            output = self.correction_layers[i](output)
+            outputs.append(output)
+        total_output = torch.cat(outputs)
+        total_output = total_output[inverse_indices]
+        return total_output
+
     def forward(self, x, batch=None):
         if batch is None:
             batch = torch.zeros(x.shape[0], dtype=torch.int)
@@ -170,6 +200,8 @@ class UncurlNetW(nn.Module):
             mu = self.m_layer(x1) + EPS
         else:
             mu = torch.matmul(self.M, x1) + EPS
+        # apply batch correction
+        mu = self.apply_correction(mu, batch)
         if self.use_reparam:
             z = self.reparameterize(mu, logvar)
             if self.use_decoder:
@@ -177,7 +209,6 @@ class UncurlNetW(nn.Module):
             else:
                 return z, mu, logvar
         else:
-            # TODO: add a batch-specific layer at the very end???
             if self.use_decoder:
                 return self.decode(mu)
             else:
@@ -220,7 +251,6 @@ class UncurlNetW(nn.Module):
         """
         self.eval()
         X_tensor = torch.tensor(X.T, dtype=torch.float32)
-        # TODO: create stuff
         encode_results = self.encode(X_tensor, batches)
         return encode_results[0].detach()
         #data_loader = torch.utils.data.DataLoader(X.T,
@@ -233,7 +263,7 @@ class UncurlNetW(nn.Module):
 
 class UncurlNet(object):
 
-    def __init__(self, X=None, k=10, genes=0, cells=0, initialization='tsvd', init_m=None, **kwargs):
+    def __init__(self, X=None, k=10, batches=None, genes=0, cells=0, initialization='tsvd', init_m=None, **kwargs):
         """
         UncurlNet can be initialized in two ways:
             - initialize using X, a genes x cells data matrix
@@ -248,6 +278,11 @@ class UncurlNet(object):
             self.X = X
             self.genes = X.shape[0]
             self.cells = X.shape[1]
+            # TODO: change default initialization??? random initialization???
+            if batches is not None and len(batches) == self.cells:
+                batches = np.array(batches)
+                # only select batch 0?
+                X = X[:, batches==0]
             M, W = initialize_means_weights(X, k, initialization=initialization)
             self.M = torch.tensor(M, dtype=torch.float32)
         else:
@@ -382,7 +417,6 @@ class UncurlNet(object):
         #optimizer = torch.optim.SparseAdam(lr=lr, weight_decay=weight_decay)
         optimizer = torch.optim.Adam(params=self.w_net.parameters(),
                 lr=lr, weight_decay=weight_decay)
-        # TODO: include batches
         for epoch in range(n_epochs):
             train_loss = 0.0
             for batch_idx, data in enumerate(data_loader):
@@ -438,8 +472,8 @@ if __name__ == '__main__':
     X_log_norm = log1p(cell_normalize(data_total)).astype(np.float32)
 
 
-    # TODO: create networks
     net1 = UncurlNet(X_log_norm, 10,
+            batches=batch_list,
             use_reparam=False, use_decoder=False,
             use_batch_norm=True,
             hidden_layers=2,
