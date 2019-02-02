@@ -17,6 +17,20 @@ from nn_utils import BatchDataset, loss_function, ElementWiseLayer,\
 
 EPS = 1e-10
 
+def multibatch_loss(w_out, batches, n_batches):
+    """
+    Args:
+        w_out (tensor): shape is (cells, k)
+        batches (array or tensor): values in [0, n_batches), length=cells
+        n_batches (int): number of batches
+    """
+    # TODO
+    # sum(w_out[batches==i].mean() - w_out[batches==0].mean() for i in range(0, n_batches))
+    if n_batches <= 1:
+        return 0
+    batch_0_mean = w_out[batches==0].mean(0)
+    return sum(((w_out[batches==i].mean(0) - batch_0_mean)**2).sum() for i in range(1, n_batches))
+
 class WEncoderMultibatch(nn.Module):
 
     def __init__(self, genes, k,
@@ -24,7 +38,8 @@ class WEncoderMultibatch(nn.Module):
             use_reparam=True,
             use_batch_norm=True,
             hidden_units=400,
-            hidden_layers=1):
+            hidden_layers=1,
+            use_shared_softmax=False):
         """
         The W Encoder generates W from the data. The MultiBatch encoder has multiple encoder
         layers for different batches.
@@ -37,6 +52,7 @@ class WEncoderMultibatch(nn.Module):
         self.use_reparam = use_reparam
         self.hidden_units = hidden_units
         self.hidden_layers = hidden_layers
+        self.use_shared_softmax = use_shared_softmax
         # TODO: set  multi-batches
         self.encoder_layers = nn.ModuleList()
         for batch in range(self.num_batches):
@@ -52,9 +68,13 @@ class WEncoderMultibatch(nn.Module):
                 if use_batch_norm:
                     encoder.append(nn.BatchNorm1d(hidden_units))
             encoder.append(nn.ReLU(True))
+            if not use_shared_softmax:
+                encoder.append(nn.Linear(hidden_units, k))
             seq = nn.Sequential(*encoder)
             self.encoder_layers.append(seq)
-        self.fc21 = nn.Linear(hidden_units, k)
+        if use_shared_softmax:
+            self.fc21 = nn.Linear(hidden_units, k)
+        # TODO: this won't work if use_shared_softmax is False
         if self.use_reparam:
             self.fc22 = nn.Linear(hidden_units, genes)
 
@@ -79,10 +99,12 @@ class WEncoderMultibatch(nn.Module):
             outputs.append(output)
         total_output = torch.cat(outputs)
         total_output = total_output[inverse_indices]
+        if self.use_shared_softmax:
+            total_output = self.fc21(total_output)
         if self.use_reparam:
-            return F.softmax(self.fc21(total_output)), self.fc22(total_output)
+            return F.softmax(total_output), self.fc22(total_output)
         else:
-            return F.softmax(self.fc21(total_output)), None
+            return F.softmax(total_output), None
 
 class WDecoder(nn.Module):
 
@@ -107,6 +129,10 @@ class UncurlNetW(nn.Module):
             use_reparam=True,
             use_m_layer=True,
             use_batch_norm=True,
+            use_multibatch_encoder=True,
+            use_multibatch_loss=True,
+            use_shared_softmax=True,
+            multibatch_loss_weight=0.5,
             hidden_units=400,
             hidden_layers=1,
             num_batches=1,
@@ -137,11 +163,21 @@ class UncurlNetW(nn.Module):
         self.use_reparam = use_reparam
         self.use_batch_norm = use_batch_norm
         self.use_m_layer = use_m_layer
+        self.use_multibatch_encoder = use_multibatch_encoder
+        self.use_multibatch_loss = use_multibatch_loss
+        self.multibatch_loss_weight = multibatch_loss_weight
         self.loss = loss.lower()
         self.num_batches = num_batches
-        self.encoder = WEncoderMultibatch(genes, k, num_batches,
-                use_reparam, use_batch_norm,
-                hidden_units=hidden_units, hidden_layers=hidden_layers)
+        if use_multibatch_encoder:
+            self.encoder = WEncoderMultibatch(genes, k, num_batches,
+                    use_reparam, use_batch_norm,
+                    hidden_units=hidden_units, hidden_layers=hidden_layers,
+                    use_shared_softmax=use_shared_softmax)
+        else:
+            from deep_uncurl_pytorch import WEncoder
+            self.encoder = WEncoder(genes, k,
+                    use_reparam, use_batch_norm,
+                    hidden_units=hidden_units, hidden_layers=hidden_layers)
         if use_m_layer:
             self.m_layer = nn.Linear(k, genes, bias=False)
             self.m_layer.weight.data = M#.transpose(0, 1)
@@ -155,11 +191,15 @@ class UncurlNetW(nn.Module):
         self.correction_layers.append(IdentityLayer())
         for b in range(num_batches - 1):
             correction = ElementWiseLayer(self.genes)
+            #correction = IdentityLayer()
             self.correction_layers.append(correction)
 
     def encode(self, x, batch):
         # returns two things: mu and logvar
-        return self.encoder(x, batch)
+        if self.use_multibatch_encoder:
+            return self.encoder(x, batch)
+        else:
+            return self.encoder(x)
 
     def decode(self, x):
         return self.decoder(x)
@@ -173,6 +213,7 @@ class UncurlNetW(nn.Module):
         """
         Applies the batch correction layers...
         """
+        # TODO: add a linear correction to w rather than do whatever this is.
         outputs = []
         inverse_indices = np.zeros(x.shape[0], dtype=int)
         num_units = 0
@@ -193,13 +234,13 @@ class UncurlNetW(nn.Module):
     def forward(self, x, batch=None):
         if batch is None:
             batch = torch.zeros(x.shape[0], dtype=torch.int)
-        x1, logvar = self.encode(x, batch)
+        w, logvar = self.encode(x, batch)
         # should be a matrix-vector product
-        mu = x1
+        mu = w
         if self.use_m_layer:
-            mu = self.m_layer(x1) + EPS
+            mu = self.m_layer(w) + EPS
         else:
-            mu = torch.matmul(self.M, x1) + EPS
+            mu = torch.matmul(self.M, w) + EPS
         # apply batch correction
         mu = self.apply_correction(mu, batch)
         if self.use_reparam:
@@ -210,9 +251,9 @@ class UncurlNetW(nn.Module):
                 return z, mu, logvar
         else:
             if self.use_decoder:
-                return self.decode(mu)
+                return self.decode(mu), w
             else:
-                return mu
+                return mu, w
 
     def clamp_m(self):
         """
@@ -233,13 +274,16 @@ class UncurlNetW(nn.Module):
             loss = loss_function(output, x, mu, logvar)
             loss.backward()
         else:
-            output = self.forward(x, batches) + EPS
+            output, w = self.forward(x, batches)
+            output += EPS
             if self.loss == 'poisson':
                 loss = F.poisson_nll_loss(output, x, log_input=False, full=True, reduction='sum')
             elif self.loss == 'l1':
                 loss = F.l1_loss(output, x, reduction='sum')
             elif self.loss == 'mse':
                 loss = F.mse_loss(output, x, reduction='sum')
+            if self.use_multibatch_loss:
+                loss += self.multibatch_loss_weight*multibatch_loss(w, batches, self.num_batches)
             loss.backward()
         optim.step()
         self.clamp_m()
@@ -341,6 +385,8 @@ class UncurlNet(object):
         self.w_net.train()
         for param in self.w_net.encoder.parameters():
             param.requires_grad = True
+        for param in self.w_net.correction_layers.parameters():
+            param.requires_grad = True
         for param in self.w_net.m_layer.parameters():
             param.requires_grad = False
         self._train(X, batches, n_epochs, lr, weight_decay, disp, device, log_interval,
@@ -354,6 +400,8 @@ class UncurlNet(object):
         self.w_net.train()
         for param in self.w_net.encoder.parameters():
             param.requires_grad = False
+        for param in self.w_net.correction_layers.parameters():
+            param.requires_grad = False
         for param in self.w_net.m_layer.parameters():
             param.requires_grad = True
         self._train(X, batches, n_epochs, lr, weight_decay, disp, device, log_interval,
@@ -366,6 +414,8 @@ class UncurlNet(object):
         """
         self.w_net.train()
         for param in self.w_net.encoder.parameters():
+            param.requires_grad = True
+        for param in self.w_net.correction_layers.parameters():
             param.requires_grad = True
         for param in self.w_net.m_layer.parameters():
             param.requires_grad = True
@@ -481,7 +531,8 @@ if __name__ == '__main__':
             num_batches=2,
             loss='mse')
 
-    net1.train_1(X_log_norm, batch_list, log_interval=10)
+    net1.train_1(X_log_norm, batch_list, log_interval=10,
+            batch_size=500)
     # TODO: test clustering?
     w = net1.w_net.get_w(X_log_norm, batch_list)
 

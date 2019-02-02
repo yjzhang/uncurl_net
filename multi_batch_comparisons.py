@@ -54,14 +54,19 @@ if __name__ == '__main__':
             batches=batch_list,
             use_reparam=False, use_decoder=False,
             use_batch_norm=True,
-            hidden_layers=2,
+            use_multibatch_encoder=False,
+            use_multibatch_loss=True,
+            hidden_layers=1,
             hidden_units=400,
             num_batches=2,
+            multibatch_loss_weight=1e5,
             loss='mse')
 
     net2.train_1(X_log_norm, batch_list, log_interval=10,
             n_encoder_epochs=20,
-            n_model_epochs=10)
+            n_model_epochs=40,
+            batch_size=500,
+            lr=5e-3)
     # TODO: test clustering?
     import torch
     w2 = net2.w_net.get_w(X_log_norm, torch.tensor(batch_list)).transpose(1, 0)
@@ -70,5 +75,5 @@ if __name__ == '__main__':
     tsne = TSNE(2)
     w2_tsne = tsne.fit_transform(w2.T)
     plt.cla()
-    plt.scatter(w2_tsne[:,0], w2_tsne[:,1], c=batch_list, alpha=0.5)
+    plt.scatter(w2_tsne[:,0], w2_tsne[:,1], c=batch_list, alpha=0.5, s=5)
     plt.savefig('multibatch.png')
