@@ -26,7 +26,7 @@ if __name__ == '__main__':
     batch_list += [1]*data_10x.shape[1]
 
     data_total = np.hstack([data_seqwell, data_10x])
-    X_log_norm = log1p(data_total).astype(np.float32)
+    X_log_norm = log1p(cell_normalize(data_total)).astype(np.float32)
 
     """
     # TODO: create networks
@@ -50,16 +50,18 @@ if __name__ == '__main__':
     plt.savefig('multibatch_no_correction.png')
     """
 
-    net2 = MultiBatchUncurlNet(X_log_norm, 10,
+    net2 = MultiBatchUncurlNet(X_log_norm, 20,
             batches=batch_list,
             use_reparam=False, use_decoder=False,
             use_batch_norm=True,
-            use_multibatch_encoder=False,
+            use_multibatch_encoder=True,
             use_multibatch_loss=True,
+            use_shared_softmax=False,
+            use_correction_layers=True,
             hidden_layers=1,
             hidden_units=400,
             num_batches=2,
-            multibatch_loss_weight=1e5,
+            multibatch_loss_weight=2e5,
             loss='mse')
 
     net2.train_1(X_log_norm, batch_list, log_interval=10,
@@ -76,4 +78,4 @@ if __name__ == '__main__':
     w2_tsne = tsne.fit_transform(w2.T)
     plt.cla()
     plt.scatter(w2_tsne[:,0], w2_tsne[:,1], c=batch_list, alpha=0.5, s=5)
-    plt.savefig('multibatch.png')
+    plt.savefig('multibatch_abs_multibatch_loss_2e5_cell_normalize.png')

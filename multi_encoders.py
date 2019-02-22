@@ -29,7 +29,7 @@ def multibatch_loss(w_out, batches, n_batches):
     if n_batches <= 1:
         return 0
     batch_0_mean = w_out[batches==0].mean(0)
-    return sum(((w_out[batches==i].mean(0) - batch_0_mean)**2).sum() for i in range(1, n_batches))
+    return sum((torch.abs(w_out[batches==i].mean(0) - batch_0_mean)).sum() for i in range(1, n_batches))
 
 class WEncoderMultibatch(nn.Module):
 
