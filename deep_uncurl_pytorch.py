@@ -1,4 +1,5 @@
 import torch
+from torch import Tensor
 import torch.nn as nn
 from torch.nn import functional as F
 import torch.utils.data
@@ -8,7 +9,6 @@ from uncurl.state_estimation import initialize_means_weights
 from nn_utils import loss_function
 
 import numpy as np
-import os
 
 # Things to try out:
 # - instead of having a encoder-decoder network for M, generate
@@ -83,7 +83,7 @@ class WEncoder(nn.Module):
 
     def __init__(self, genes, k, use_reparam=True, use_batch_norm=True,
             hidden_units=400,
-            hidden_layers=1):
+            hidden_layers=1, device='cpu'):
         """
         The W Encoder generates W from the data.
         """
@@ -107,6 +107,8 @@ class WEncoder(nn.Module):
         self.fc21 = nn.Linear(hidden_units, k)
         if self.use_reparam:
             self.fc22 = nn.Linear(hidden_units, genes)
+        if device == 'cuda':
+            self.cuda()
 
     def forward(self, x):
         output = self.fc1(x)
@@ -124,7 +126,8 @@ class WEncoder(nn.Module):
 
 class WDecoder(nn.Module):
 
-    def __init__(self, genes, k, use_reparam=True, use_batch_norm=True):
+    def __init__(self, genes, k, use_reparam=True, use_batch_norm=True,
+            device='cpu'):
         """
         The W Decoder takes M*W, and returns X.
         """
@@ -132,6 +135,8 @@ class WDecoder(nn.Module):
         self.fc_dec1 = nn.Linear(genes, 400)
         #self.fc_dec2 = nn.Linear(400, 400)
         self.fc_dec3 = nn.Linear(400, genes)
+        if device == 'cuda':
+            self.cuda()
 
     def forward(self, x):
         output = F.relu(self.fc_dec1(x))
@@ -149,6 +154,7 @@ class UncurlNetW(nn.Module):
             hidden_units=400,
             hidden_layers=1,
             loss='poisson',
+            device='cpu',
             **kwargs):
         """
         This is an autoencoder architecture that learns a mapping from
@@ -178,20 +184,27 @@ class UncurlNetW(nn.Module):
         self.loss = loss.lower()
         # TODO: add batch norm???
         self.encoder = WEncoder(genes, k, use_reparam, use_batch_norm,
-                hidden_units=hidden_units, hidden_layers=hidden_layers)
+                hidden_units=hidden_units, hidden_layers=hidden_layers,
+                device=device)
         if use_m_layer:
             self.m_layer = nn.Linear(k, genes, bias=False)
             self.m_layer.weight.data = M#.transpose(0, 1)
         if self.use_decoder:
-            self.decoder = WDecoder(genes, k, use_reparam, use_batch_norm)
+            self.decoder = WDecoder(genes, k, use_reparam, use_batch_norm,
+                    device=device)
         else:
             self.decoder = None
+        self.device = device
+        if device == 'cuda':
+            self.cuda()
 
     def encode(self, x):
         # returns two things: mu and logvar
+        x = x.to(self.device)
         return self.encoder(x)
 
     def decode(self, x):
+        x = x.to(self.device)
         return self.decoder(x)
 
     def reparameterize(self, mu, logvar):
@@ -457,6 +470,8 @@ if __name__ == '__main__':
     genes = uncurl.max_variance_genes(X, 5, 0.2)
     X_subset = X[genes,:]
 
+    device = 'cuda'
+
 
     X_log_norm = log1p(cell_normalize(X_subset)).astype(np.float32)
     uncurl_net = UncurlNet(X_log_norm, 8,
@@ -464,18 +479,22 @@ if __name__ == '__main__':
             use_batch_norm=True,
             hidden_layers=2,
             hidden_units=200,
-            loss='mse')
+            loss='mse',
+            device=device)
     m_init = torch.tensor(uncurl_net.M)
 
     uncurl_net.pre_train_encoder(None, lr=1e-3, n_epochs=20,
-            log_interval=10)
+            log_interval=10, device=device)
     uncurl_net.train_model(None, lr=1e-3, n_epochs=50,
-            log_interval=10)
+            log_interval=10, device=device)
     w = uncurl_net.w_net.get_w(X_log_norm).transpose(1, 0)
     m = uncurl_net.w_net.get_m()
     mw = torch.matmul(m, w)
     km = KMeans(8)
     print(w.argmax(0))
+    w = Tensor.cpu(w)
+    m = Tensor.cpu(m)
+    mw = Tensor.cpu(mw)
     labels = w.argmax(0).numpy().squeeze()
     labels_km = km.fit_predict(w.transpose(1, 0))
     labels_km_mw = km.fit_predict(mw.transpose(1, 0))
@@ -502,16 +521,20 @@ if __name__ == '__main__':
     uncurl_net = UncurlNet(X_log_norm, 7,
             use_reparam=False, use_decoder=False,
             use_batch_norm=True,
-            loss='mse')
+            loss='mse',
+            device=device)
     m_init = torch.tensor(uncurl_net.M)
     uncurl_net.pre_train_encoder(X_log_norm, lr=1e-3, n_epochs=20,
-            log_interval=10)
+            log_interval=10, device=device)
     uncurl_net.train_model(X_log_norm, lr=1e-3, n_epochs=50,
-            log_interval=10)
+            log_interval=10, device=device)
     w = uncurl_net.w_net.get_w(X_log_norm)
     m = uncurl_net.w_net.get_m()
     km = KMeans(7)
     print(w.argmax(1))
+    w = Tensor.cpu(w)
+    m = Tensor.cpu(m)
+    mw = Tensor.cpu(mw)
     labels = w.argmax(1).numpy().squeeze()
     labels_km = km.fit_predict(w)
     print('nmi after alternating training:', nmi(labels, actual_labels))
@@ -524,36 +547,41 @@ if __name__ == '__main__':
     ############# dataset 3: Zeisel full
 
     zeisel_mat = scipy.io.loadmat('../uncurl_test_datasets/zeisel/Zeisel.mat')
-    zeisel_data = zeisel_mat['X'].toarray().astype(np.float32).T
-    zeisel_labs = zeisel_mat['true_labs'].flatten()
+    zeisel_data = zeisel_mat['data'].toarray().astype(np.float32)
+    zeisel_labs = zeisel_mat['labels'].flatten()
     k = len(set(zeisel_labs))
 
     genes = uncurl.max_variance_genes(zeisel_data, 5, 0.2)
-    X_subset = zeisel_data[genes,:]
+    X_subset = zeisel_data[genes, :]
     X_log_norm = log1p(cell_normalize(X_subset)).astype(np.float32)
+    X_norm = cell_normalize(X_subset).astype(np.float32)
 
-    uncurl_net = UncurlNet(X_log_norm, k,
+    uncurl_net = UncurlNet(X_norm, k,
             use_reparam=False, use_decoder=False,
-            use_batch_norm=True)
+            use_batch_norm=True,
+            device=device)
     m_init = torch.tensor(uncurl_net.M)
 
     uncurl_net.pre_train_encoder(X_log_norm, lr=1e-3, n_epochs=20,
-                log_interval=10)
+                log_interval=10, device=device)
     uncurl_net.train_model(X_log_norm, lr=1e-3, n_epochs=50,
-                log_interval=10)
+                log_interval=10, device=device)
 
 
     w = uncurl_net.w_net.get_w(X_log_norm)
     m = uncurl_net.w_net.get_m()
     km = KMeans(k)
     print(w.argmax(1))
+    w = Tensor.cpu(w)
+    m = Tensor.cpu(m)
+    mw = Tensor.cpu(mw)
     labels = w.argmax(1).numpy().squeeze()
     labels_km = km.fit_predict(w)
     print('nmi after alternating training:', nmi(labels, zeisel_labs))
     print('nmi of km after alternating training:', nmi(labels_km, zeisel_labs))
 
-    m, w, ll = uncurl.poisson_estimate_state(X_subset, clusters=k)
-    print(nmi(zeisel_labs, w.argmax(0)))
+    #m, w, ll = uncurl.poisson_estimate_state(X_subset, clusters=k)
+    #print(nmi(zeisel_labs, w.argmax(0)))
 
 
 
@@ -565,23 +593,28 @@ if __name__ == '__main__':
     X_subset = data[genes,:]
 
     X_log_norm = log1p(cell_normalize(X_subset)).astype(np.float32)
+    X_norm = cell_normalize(X_subset).astype(np.float32)
     uncurl_net = UncurlNet(X_log_norm, 8,
             use_reparam=False, use_decoder=False,
             use_batch_norm=True,
             hidden_layers=1,
             hidden_units=400,
-            loss='mse')
+            #loss='mse',
+            device=device)
     m_init = torch.tensor(uncurl_net.M)
 
     uncurl_net.pre_train_encoder(None, lr=1e-3, n_epochs=20,
-            log_interval=10)
+            log_interval=10, device=device)
     uncurl_net.train_model(None, lr=1e-3, n_epochs=50,
-            log_interval=10)
+            log_interval=10, device=device)
     w = uncurl_net.w_net.get_w(X_log_norm).transpose(1, 0)
     m = uncurl_net.w_net.get_m()
     mw = torch.matmul(m, w)
     km = KMeans(8)
     print(w.argmax(0))
+    w = Tensor.cpu(w)
+    m = Tensor.cpu(m)
+    mw = Tensor.cpu(mw)
     labels = w.argmax(0).numpy().squeeze()
     labels_km = km.fit_predict(w.transpose(1, 0))
     labels_km_mw = km.fit_predict(mw.transpose(1, 0))
